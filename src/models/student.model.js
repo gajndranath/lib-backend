@@ -189,12 +189,12 @@ studentSchema.methods.reactivate = function () {
 };
 
 // Pre-save hook to validate seat availability
-studentSchema.pre("save", async function () {
-  // Only validate if slotId or status is being modified
-  if (this.isModified("slotId") || this.isModified("status")) {
-    // Only validate for active students
-    if (this.status === "ACTIVE") {
-      try {
+studentSchema.pre("save", async function (next) {
+  try {
+    // Only validate if slotId or status is being modified
+    if (this.isModified("slotId") || this.isModified("status")) {
+      // Only validate for active students
+      if (this.status === "ACTIVE") {
         const Slot = mongoose.model("Slot");
         const slot = await Slot.findById(this.slotId);
 
@@ -206,17 +206,15 @@ studentSchema.pre("save", async function () {
           });
 
           if (occupiedSeats >= slot.totalSeats) {
-            // Throw error instead of calling next()
             throw new Error(`Slot "${slot.name}" is full. No seats available.`);
           }
         }
-      } catch (error) {
-        // Re-throw the error for Mongoose to catch
-        throw error;
       }
     }
+    next();
+  } catch (error) {
+    next(error);
   }
-  // No need to call next() in async middleware
 });
 
 export const Student = mongoose.model("Student", studentSchema);
