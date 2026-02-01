@@ -13,24 +13,21 @@ cron.schedule("1 0 1 * *", async () => {
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    // Generate fees for current month
     const result = await FeeService.generateMonthlyFees(
       currentMonth,
       currentYear,
-      null, // System action
+      null,
     );
 
     console.log(
       `✅ Monthly fees generated: ${result.generated} created, ${result.skipped} skipped`,
     );
 
-    // Generate reminders for the new month
     const reminders = await ReminderService.generateMonthlyReminders();
     console.log(`✅ Monthly reminders generated: ${reminders.length}`);
   } catch (error) {
     console.error("❌ Error in monthly fee generation:", error);
 
-    // Send alert to admins
     await NotificationService.sendSystemAlert(
       "Monthly Fee Generation Failed",
       `Error: ${error.message}`,
@@ -44,14 +41,12 @@ cron.schedule("0 9 * * *", async () => {
   console.log("🔔 Daily reminder processing job started");
 
   try {
-    // Process today's reminders
     const result = await ReminderService.processTodayReminders();
 
     console.log(
       `✅ Daily reminders processed: ${result.sent} sent, ${result.failed} failed`,
     );
 
-    // Generate due reminders for today
     const dueReminders = await ReminderService.generateDueReminders();
     console.log(`✅ Due reminders generated: ${dueReminders.length}`);
   } catch (error) {
@@ -68,7 +63,6 @@ cron.schedule("0 10 * * *", async () => {
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    // Find fees that are still pending from previous months
     const pendingFees = await mongoose.model("StudentMonthlyFee").aggregate([
       {
         $match: {
@@ -98,19 +92,18 @@ cron.schedule("0 10 * * *", async () => {
       },
     ]);
 
-    // Auto-mark as due if grace period passed
     for (const fee of pendingFees) {
-      const feeDate = new Date(fee.year, fee.month + 1, 0); // Last day of fee month
+      const feeDate = new Date(fee.year, fee.month + 1, 0);
       const gracePeriodEnd = new Date(feeDate);
-      gracePeriodEnd.setDate(gracePeriodEnd.getDate() + 2); // 2-day grace period
+      gracePeriodEnd.setDate(gracePeriodEnd.getDate() + 2);
 
       if (today > gracePeriodEnd) {
         await FeeService.markAsDue(
           fee.studentId,
           fee.month,
           fee.year,
-          today, // Reminder date is today
-          null, // System action
+          today,
+          null,
         );
 
         console.log(
@@ -138,7 +131,6 @@ cron.schedule("0 11 * * *", async () => {
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    // Find pending fees with advance balance
     const pendingFees = await mongoose.model("StudentMonthlyFee").find({
       month: currentMonth,
       year: currentYear,
@@ -154,12 +146,11 @@ cron.schedule("0 11 * * *", async () => {
           fee.studentId,
           fee.month,
           fee.year,
-          null, // System action
+          null,
         );
 
         appliedCount++;
       } catch (error) {
-        // Skip if insufficient advance or other issues
         continue;
       }
     }
@@ -179,7 +170,6 @@ cron.schedule("0 9 * * *", async () => {
       await import("../services/adminReminder.service.js")
     ).default;
 
-    // Process end of month due reminders
     await AdminReminderService.processEndOfMonthDueReminders();
 
     console.log("✅ End-of-month due reminders processed");
@@ -193,20 +183,29 @@ cron.schedule("0 * * * *", async () => {
   console.log("🩺 System health check job started");
 
   try {
-    const Admin = mongoose.model("Admin");
-    const connectedAdmins = req.app.get("adminTokens").size || 0;
+    // Check database connection status
+    const isConnected = mongoose.connection.readyState === 1;
+    const connectionStatus = isConnected ? "CONNECTED" : "DISCONNECTED";
 
-    // Check database connections
-    const dbStats = await mongoose.connection.db.stats();
+    // Get basic database stats if connected
+    let dbInfo = {};
+    if (isConnected) {
+      try {
+        const dbStats = await mongoose.connection.db.stats();
+        dbInfo = {
+          status: connectionStatus,
+          collections: dbStats.collections || "N/A",
+        };
+      } catch (err) {
+        dbInfo = { status: connectionStatus };
+      }
+    } else {
+      dbInfo = { status: connectionStatus };
+    }
 
-    // Send system status
-    await NotificationService.sendSystemAlert(
-      "System Health Check",
-      `Status: OK\nConnected Admins: ${connectedAdmins}\nDB Connections: ${dbStats.connections.current}`,
-      "INFO",
-    );
+    console.log(`✅ System health check completed - DB: ${dbInfo.status}`);
   } catch (error) {
-    console.error("❌ Error in system health check:", error);
+    console.error("❌ Error in system health check:", error.message);
   }
 });
 
