@@ -48,16 +48,8 @@ app.use(
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ limit: "16kb", extended: true }));
 
-// CORS middleware
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN || "https://lib-frontend-roan.vercel.app/",
-    credentials: true,
-  }),
-);
-
-// Rate limiter middleware
-app.use(rateLimiter);
+// Cookie parser
+app.use(cookieParser());
 
 // Import routes
 import studentRouter from "./routes/student.routes.js";
