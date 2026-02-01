@@ -5,10 +5,17 @@ let transporter = null;
 
 export const initializeEmail = () => {
   try {
+    if (process.env.EMAIL_DISABLED === "true") {
+      console.warn("⚠️ Email service disabled via EMAIL_DISABLED.");
+      transporter = null;
+      return null;
+    }
+
     if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER) {
       console.warn(
         "⚠️ Email configuration not found. Email notifications will be disabled."
       );
+      transporter = null;
       return null;
     }
 
@@ -20,6 +27,9 @@ export const initializeEmail = () => {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
       },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
       tls: {
         rejectUnauthorized: false,
       },
@@ -29,6 +39,7 @@ export const initializeEmail = () => {
     transporter.verify((error) => {
       if (error) {
         console.error("❌ Email configuration error:", error);
+        transporter = null;
       } else {
         console.log("✅ Email server is ready to send messages");
       }
@@ -37,20 +48,28 @@ export const initializeEmail = () => {
     return transporter;
   } catch (error) {
     console.error("❌ Email initialization failed:", error.message);
+    transporter = null;
     return null;
   }
 };
 
 export const getEmailTransporter = () => {
   if (!transporter) {
-    throw new ApiError(500, "Email service not initialized");
+    return null;
   }
   return transporter;
 };
 
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
+    if (process.env.EMAIL_DISABLED === "true") {
+      return { success: false, error: "Email service disabled" };
+    }
+
     const mailTransporter = getEmailTransporter();
+    if (!mailTransporter) {
+      return { success: false, error: "Email service not initialized" };
+    }
 
     const mailOptions = {
       from: `"${process.env.EMAIL_FROM_NAME || "Library System"}" <${
