@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
-import { errorHandler } from "./middlewares/error.middleware.js";
+import errorHandler from "./middlewares/error.middleware.js";
 import { apiLimiter } from "./middlewares/rateLimiter.middleware.js";
 
 const app = express();
