@@ -24,7 +24,7 @@ class StudentService {
       if (existingStudent) {
         throw new ApiError(
           409,
-          "Student with this phone number already exists"
+          "Student with this phone number already exists",
         );
       }
 
@@ -48,7 +48,7 @@ class StudentService {
       if (occupiedSeats >= slot.totalSeats) {
         throw new ApiError(
           400,
-          `Slot "${slot.name}" is full. Please select another slot.`
+          `Slot "${slot.name}" is full. Please select another slot.`,
         );
       }
 
@@ -62,16 +62,16 @@ class StudentService {
       // Generate initial fee record for current month
       try {
         const currentDate = new Date();
-        await FeeService.createInitialFeeForStudent(
+        await FeeService.ensureMonthlyFeeExists(
           student._id,
-          student.monthlyFee,
           currentDate.getMonth(),
           currentDate.getFullYear(),
-          adminId
+          adminId,
         );
         console.log("Initial fee created successfully");
       } catch (feeError) {
         console.error("Error creating initial fee:", feeError);
+        // Don't throw - student is already created
       }
 
       // Log the action
@@ -128,7 +128,7 @@ class StudentService {
       if (phoneExists) {
         throw new ApiError(
           409,
-          "Another student already uses this phone number"
+          "Another student already uses this phone number",
         );
       }
     }
@@ -214,7 +214,7 @@ class StudentService {
       if (occupiedSeats >= slot.totalSeats) {
         throw new ApiError(
           400,
-          `Slot "${slot.name}" is full. Cannot reactivate student.`
+          `Slot "${slot.name}" is full. Cannot reactivate student.`,
         );
       }
     }
@@ -242,7 +242,7 @@ class StudentService {
   static async getStudentDetails(studentId) {
     const student = await Student.findById(studentId).populate(
       "slotId",
-      "name timeRange monthlyFee"
+      "name timeRange monthlyFee",
     );
 
     if (!student) {
