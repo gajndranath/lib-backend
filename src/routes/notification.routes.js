@@ -2,8 +2,14 @@ import { Router } from "express";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import {
   savePushSubscription,
-  sendTestNotification,
   removePushSubscription,
+  testNotificationChannels,
+  getVapidKey,
+  getNotificationHistory,
+  markAsRead,
+  markAllAsRead,
+  getNotificationPreferences,
+  updateNotificationPreferences,
 } from "../controllers/notification.controller.js";
 
 const router = Router();
@@ -11,34 +17,27 @@ const router = Router();
 // All routes require authentication
 router.use(verifyJWT);
 
-// Save push subscription (web or FCM)
+// Push subscription management
 router.route("/subscribe").post(savePushSubscription);
-
-// Remove subscription
 router.route("/unsubscribe").post(removePushSubscription);
 
-// Send test notification
-router.route("/test").post(sendTestNotification);
+// VAPID key for web push
+router.route("/vapid-key").get(getVapidKey);
 
-// Get VAPID public key for web push
-router.route("/vapid-public-key").get((req, res) => {
-  res.send(process.env.PUBLIC_VAPID_KEY);
-});
+// Notification preferences
+router
+  .route("/preferences")
+  .get(getNotificationPreferences)
+  .put(updateNotificationPreferences);
 
-// Get notification history
-router.route("/history").get(async (req, res) => {
-  // In production, you'd fetch from a Notification model
-  const notifications = [
-    {
-      id: 1,
-      title: "Welcome",
-      body: "Welcome to Library Management System",
-      timestamp: new Date(),
-      read: true,
-    },
-  ];
+// Notification history
+router.route("/history").get(getNotificationHistory);
 
-  res.json({ success: true, data: notifications });
-});
+// Mark notifications
+router.route("/read/:notificationId").patch(markAsRead);
+router.route("/read-all").patch(markAllAsRead);
+
+// Test notifications
+router.route("/test").post(testNotificationChannels);
 
 export default router;

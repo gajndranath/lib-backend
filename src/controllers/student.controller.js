@@ -1,221 +1,262 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import { Student } from "../models/student.model.js";
-import { Ledger } from "../models/ledger.model.js";
-import { PaymentStatus, StudentStatus } from "../constants.js";
+import StudentService from "../services/student.service.js";
+import FeeService from "../services/fee.service.js";
+import SlotService from "../services/slot.service.js";
 import { studentRegistrationSchema } from "../utils/validators.js";
-import NotificationService from "../services/notification.service.js";
-
-export const updatePaymentStatus = asyncHandler(async (req, res) => {
-  const { studentId, month, year, status, remarks, amount } = req.body;
-
-  if (!studentId || status === undefined) {
-    throw new ApiError(400, "Student ID and Status are required");
-  }
-
-  // Find student
-  const student = await Student.findById(studentId);
-  if (!student) throw new ApiError(404, "Student not found");
-
-  // 1. Database Update
-  const updateData = {
-    paymentStatus: status,
-    remarks: remarks || "",
-  };
-
-  if (status === PaymentStatus.PAID) {
-    updateData.paidAmount = amount || student.monthlyFees;
-    updateData.paymentDate = new Date();
-  } else if (status === PaymentStatus.PARTIAL && amount) {
-    updateData.paidAmount = amount;
-    updateData.paymentDate = new Date();
-  } else {
-    updateData.paidAmount = 0;
-    updateData.paymentDate = null;
-  }
-
-  const updatedLedger = await Ledger.findOneAndUpdate(
-    { studentId, billingMonth: month, billingYear: year },
-    { $set: updateData },
-    { new: true, upsert: true }
-  ).populate("studentId");
-
-  // 2. Real-time Sync via Socket.io
-  const io = req.app.get("io");
-  io.to("admins").emit("payment_sync", {
-    studentId,
-    studentName: student.name,
-    month,
-    year,
-    status: updatedLedger.paymentStatus,
-    amount: updatedLedger.paidAmount,
-    updatedBy: req.admin.username,
-    timestamp: new Date(),
-  });
-
-  // 3. Send notification if payment received
-  if (status === PaymentStatus.PAID) {
-    const admins = await Admin.find({ "notificationPreferences.push": true });
-
-    for (const admin of admins) {
-      if (
-        admin.webPushSubscription &&
-        admin._id.toString() !== req.admin._id.toString()
-      ) {
-        await NotificationService.sendWebPush(admin.webPushSubscription, {
-          title: "💰 Payment Received",
-          body: `${student.name} paid ₹${updatedLedger.paidAmount} for ${
-            month + 1
-          }/${year}`,
-          icon: "/icons/icon-192x192.png",
-          data: {
-            studentId: student._id.toString(),
-            type: "payment_received",
-            url: `/student/${student._id}`,
-          },
-        });
-      }
-    }
-  }
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(200, updatedLedger, "Payment status updated and synced")
-    );
-});
 
 export const registerStudent = asyncHandler(async (req, res) => {
-  // 1. Validate Input
+  // Validate input
   const validation = studentRegistrationSchema.safeParse(req.body);
   if (!validation.success) {
+    console.log("Validation errors:", validation.error.errors);
     throw new ApiError(400, "Validation Error", validation.error.errors);
   }
 
-  const { name, phone, monthlyFees, joiningDate } = req.body;
-
-  // 2. Business Logic
-  const existedStudent = await Student.findOne({ phone });
-  if (existedStudent) throw new ApiError(409, "Student already exists");
-
-  const dateObj = joiningDate ? new Date(joiningDate) : new Date();
-
-  const student = await Student.create({
-    name,
-    phone,
-    monthlyFees,
-    joiningDate: dateObj,
-    billingDay: dateObj.getDate(),
-  });
-
-  // 3. Create Initial Ledger entry
-  await Ledger.create({
-    studentId: student._id,
-    billingMonth: dateObj.getMonth(),
-    billingYear: dateObj.getFullYear(),
-    dueAmount: monthlyFees,
-  });
-
-  // 4. Send notification to admins
-  const io = req.app.get("io");
-  io.to("admins").emit("student_added", {
-    studentId: student._id,
-    studentName: student.name,
-    addedBy: req.admin.username,
-    timestamp: new Date(),
-  });
-
-  return res.status(201).json(new ApiResponse(201, student, "Student Added"));
-});
-
-export const getDashboardData = asyncHandler(async (req, res) => {
-  const { month, year } = req.query;
-
-  const currentMonth = month ? parseInt(month) : new Date().getMonth();
-  const currentYear = year ? parseInt(year) : new Date().getFullYear();
-
-  const students = await Student.find({ isDeleted: false, status: "ACTIVE" });
-
-  const dashboardList = await Promise.all(
-    students.map(async (student) => {
-      const ledger = await Ledger.findOne({
-        studentId: student._id,
-        billingMonth: currentMonth,
-        billingYear: currentYear,
-      });
-
-      return {
-        ...student._doc,
-        paymentStatus: ledger ? ledger.paymentStatus : "NOT_GENERATED",
-        dueAmount: ledger ? ledger.dueAmount : student.monthlyFees,
-        paidAmount: ledger ? ledger.paidAmount : 0,
-        paymentDate: ledger ? ledger.paymentDate : null,
-        remarks: ledger ? ledger.remarks : "",
-      };
-    })
+  const student = await StudentService.registerStudent(
+    validation.data,
+    req.admin._id,
   );
 
-  // Calculate summary
-  const summary = {
-    totalStudents: students.length,
-    paidStudents: dashboardList.filter((s) => s.paymentStatus === "PAID")
-      .length,
-    unpaidStudents: dashboardList.filter((s) => s.paymentStatus === "UNPAID")
-      .length,
-    pendingStudents: dashboardList.filter(
-      (s) => s.paymentStatus === "NOT_GENERATED"
-    ).length,
-    totalExpected: dashboardList.reduce((sum, s) => sum + s.dueAmount, 0),
-    totalReceived: dashboardList.reduce((sum, s) => sum + s.paidAmount, 0),
-    totalPending: dashboardList.reduce(
-      (sum, s) => sum + (s.dueAmount - s.paidAmount),
-      0
-    ),
-  };
+  return res
+    .status(201)
+    .json(new ApiResponse(201, student, "Student registered successfully"));
+});
+
+export const updateStudent = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const updateData = req.body;
+
+  const student = await StudentService.updateStudent(
+    studentId,
+    updateData,
+    req.admin._id,
+  );
 
   return res
     .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { students: dashboardList, summary },
-        "Dashboard data fetched"
-      )
-    );
+    .json(new ApiResponse(200, student, "Student updated successfully"));
 });
 
-export const toggleStudentReminder = asyncHandler(async (req, res) => {
-  const { studentId, pause } = req.body;
+export const archiveStudent = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { reason } = req.body;
 
-  const student = await Student.findByIdAndUpdate(
+  const student = await StudentService.archiveStudent(
     studentId,
-    { reminderPaused: pause },
-    { new: true }
+    reason,
+    req.admin._id,
   );
 
-  if (!student) throw new ApiError(404, "Student not found");
-
-  const message = pause
-    ? "Reminders paused for this student"
-    : "Reminders enabled for this student";
-
-  return res.status(200).json(new ApiResponse(200, student, message));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, student, "Student archived successfully"));
 });
 
-export const getStudentHistory = asyncHandler(async (req, res) => {
+export const reactivateStudent = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
 
-  const student = await Student.findById(studentId);
-  if (!student) throw new ApiError(404, "Student not found");
-
-  const ledgers = await Ledger.find({ studentId })
-    .sort({ billingYear: -1, billingMonth: -1 })
-    .limit(12);
+  const student = await StudentService.reactivateStudent(
+    studentId,
+    req.admin._id,
+  );
 
   return res
     .status(200)
-    .json(
-      new ApiResponse(200, { student, ledgers }, "Student history fetched")
-    );
+    .json(new ApiResponse(200, student, "Student reactivated successfully"));
+});
+
+export const getStudentDetails = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+
+  const studentDetails = await StudentService.getStudentDetails(studentId);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, studentDetails, "Student details fetched"));
+});
+
+export const searchStudents = asyncHandler(async (req, res) => {
+  const { query, page = 1, limit = 20 } = req.query;
+
+  const result = await StudentService.searchStudents(
+    { search: query, ...req.query },
+    parseInt(page),
+    parseInt(limit),
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Students search results"));
+});
+
+export const getStudentsBySlot = asyncHandler(async (req, res) => {
+  const { slotId } = req.params;
+  const { status } = req.query;
+
+  const students = await StudentService.getStudentsBySlot(slotId, status);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, students, "Students by slot fetched"));
+});
+
+export const markFeeAsPaid = asyncHandler(async (req, res) => {
+  const { studentId, month, year } = req.params;
+  const paymentData = req.body;
+
+  const result = await FeeService.markAsPaid(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+    {
+      ...paymentData,
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+    },
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Fee marked as paid successfully"));
+});
+
+export const markFeeAsDue = asyncHandler(async (req, res) => {
+  const { studentId, month, year } = req.params;
+  const { reminderDate } = req.body;
+
+  const result = await FeeService.markAsDue(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+    new Date(reminderDate),
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Fee marked as due successfully"));
+});
+
+export const addAdvance = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { amount } = req.body;
+
+  const advanceBalance = await FeeService.addAdvance(
+    studentId,
+    amount,
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, advanceBalance, "Advance added successfully"));
+});
+
+export const getFeeSummary = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+
+  const summary = await FeeService.getStudentFeeSummary(studentId);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, summary, "Fee summary fetched"));
+});
+
+export const getDashboardPaymentStatus = asyncHandler(async (req, res) => {
+  const { month, year } = req.query;
+
+  const currentDate = new Date();
+  const targetMonth = month ? parseInt(month) : currentDate.getMonth();
+  const targetYear = year ? parseInt(year) : currentDate.getFullYear();
+
+  const status = await FeeService.getDashboardPaymentStatus(
+    targetMonth,
+    targetYear,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, status, "Payment status fetched"));
+});
+
+export const changeStudentSlot = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { newSlotId } = req.body;
+
+  const result = await SlotService.changeStudentSlot(
+    studentId,
+    newSlotId,
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Student slot changed successfully"));
+});
+
+export const overrideStudentFee = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { newMonthlyFee, reason } = req.body;
+
+  const student = await SlotService.overrideStudentFee(
+    studentId,
+    newMonthlyFee,
+    reason,
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, student, "Student fee overridden successfully"));
+});
+// Save student push subscription for notifications
+export const savePushSubscription = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { subscription, type = "web", deviceInfo = {} } = req.body;
+
+  if (!subscription) {
+    throw new ApiError(400, "Subscription is required");
+  }
+
+  const Student = (await import("../models/student.model.js")).Student;
+
+  // Update based on type
+  if (type === "web") {
+    await Student.findByIdAndUpdate(studentId, {
+      webPushSubscription: subscription,
+    });
+  } else if (type === "fcm") {
+    await Student.findByIdAndUpdate(studentId, {
+      fcmToken: subscription.token || subscription,
+    });
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Subscription saved successfully"));
+});
+
+// Remove student push subscription
+export const removePushSubscription = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { type = "web" } = req.body;
+
+  const Student = (await import("../models/student.model.js")).Student;
+
+  if (type === "web") {
+    await Student.findByIdAndUpdate(studentId, {
+      webPushSubscription: null,
+    });
+  } else if (type === "fcm") {
+    await Student.findByIdAndUpdate(studentId, {
+      fcmToken: null,
+    });
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Subscription removed successfully"));
 });

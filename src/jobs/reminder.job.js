@@ -1,30 +1,82 @@
 import cron from "node-cron";
-import { Ledger } from "../models/ledger.model.js";
-import { Student } from "../models/student.model.js";
-import { Admin } from "../models/admin.model.js";
+import mongoose from "mongoose";
+import ReminderService from "../services/reminder.service.js";
+import FeeService from "../services/fee.service.js";
 import NotificationService from "../services/notification.service.js";
 
-// Daily reminder at 9 AM
-cron.schedule("0 9 * * *", async () => {
-  console.log("📅 Daily Reminder Job Started:", new Date().toISOString());
+// 1. Monthly fee generation - 1st of every month at 00:01
+cron.schedule("1 0 1 * *", async () => {
+  console.log("📋 Monthly fee generation job started");
 
   try {
     const today = new Date();
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    // Find overdue records (unpaid from previous months)
-    const overdueRecords = await Ledger.aggregate([
+    // Generate fees for current month
+    const result = await FeeService.generateMonthlyFees(
+      currentMonth,
+      currentYear,
+      null, // System action
+    );
+
+    console.log(
+      `✅ Monthly fees generated: ${result.generated} created, ${result.skipped} skipped`,
+    );
+
+    // Generate reminders for the new month
+    const reminders = await ReminderService.generateMonthlyReminders();
+    console.log(`✅ Monthly reminders generated: ${reminders.length}`);
+  } catch (error) {
+    console.error("❌ Error in monthly fee generation:", error);
+
+    // Send alert to admins
+    await NotificationService.sendSystemAlert(
+      "Monthly Fee Generation Failed",
+      `Error: ${error.message}`,
+      "CRITICAL",
+    );
+  }
+});
+
+// 2. Daily reminder processing - Every day at 09:00
+cron.schedule("0 9 * * *", async () => {
+  console.log("🔔 Daily reminder processing job started");
+
+  try {
+    // Process today's reminders
+    const result = await ReminderService.processTodayReminders();
+
+    console.log(
+      `✅ Daily reminders processed: ${result.sent} sent, ${result.failed} failed`,
+    );
+
+    // Generate due reminders for today
+    const dueReminders = await ReminderService.generateDueReminders();
+    console.log(`✅ Due reminders generated: ${dueReminders.length}`);
+  } catch (error) {
+    console.error("❌ Error in daily reminder processing:", error);
+  }
+});
+
+// 3. Check for overdue payments - Every day at 10:00
+cron.schedule("0 10 * * *", async () => {
+  console.log("⏰ Overdue payment check job started");
+
+  try {
+    const today = new Date();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+
+    // Find fees that are still pending from previous months
+    const pendingFees = await mongoose.model("StudentMonthlyFee").aggregate([
       {
         $match: {
-          paymentStatus: "UNPAID",
+          status: "PENDING",
           $or: [
-            { billingYear: { $lt: currentYear } },
+            { year: { $lt: currentYear } },
             {
-              $and: [
-                { billingYear: currentYear },
-                { billingMonth: { $lt: currentMonth } },
-              ],
+              $and: [{ year: currentYear }, { month: { $lt: currentMonth } }],
             },
           ],
         },
@@ -41,136 +93,121 @@ cron.schedule("0 9 * * *", async () => {
       {
         $match: {
           "student.status": "ACTIVE",
-          "student.reminderPaused": false,
           "student.isDeleted": false,
         },
       },
     ]);
 
-    // Get all admins with notification preferences
-    const admins = await Admin.find({
-      "notificationPreferences.push": true,
-    });
+    // Auto-mark as due if grace period passed
+    for (const fee of pendingFees) {
+      const feeDate = new Date(fee.year, fee.month + 1, 0); // Last day of fee month
+      const gracePeriodEnd = new Date(feeDate);
+      gracePeriodEnd.setDate(gracePeriodEnd.getDate() + 2); // 2-day grace period
 
-    // Send individual overdue notifications
-    for (const record of overdueRecords) {
-      const student = record.student;
-      const title = "⏰ Overdue Payment Reminder";
-      const message = `${student.name} has overdue payment of ₹${
-        record.dueAmount
-      } from ${record.billingMonth + 1}/${record.billingYear}`;
+      if (today > gracePeriodEnd) {
+        await FeeService.markAsDue(
+          fee.studentId,
+          fee.month,
+          fee.year,
+          today, // Reminder date is today
+          null, // System action
+        );
 
-      for (const admin of admins) {
-        if (admin.webPushSubscription) {
-          try {
-            await NotificationService.sendWebPush(admin.webPushSubscription, {
-              title,
-              body: message,
-              icon: "/icons/icon-192x192.png",
-              badge: "/icons/badge-72x72.png",
-              data: {
-                studentId: student._id.toString(),
-                type: "overdue_payment",
-                url: `/student/${student._id}`,
-                ledgerId: record._id.toString(),
-              },
-              actions: [
-                {
-                  action: "view",
-                  title: "View Student",
-                },
-                {
-                  action: "mark_paid",
-                  title: "Mark as Paid",
-                },
-              ],
-              vibrate: [200, 100, 200],
-              requireInteraction: true,
-              tag: `overdue_${student._id}`,
-            });
-          } catch (error) {
-            if (error.statusCode === 410) {
-              console.log(
-                `Removing expired subscription for admin ${admin._id}`
-              );
-              admin.webPushSubscription = null;
-              await admin.save();
-            }
-          }
-        }
-
-        // Send Email
-        if (admin.notificationPreferences.email && admin.email) {
-          await NotificationService.sendEmail(admin.email, title, message);
-        }
-      }
-    }
-
-    // Send daily summary
-    const pendingThisMonth = await Ledger.countDocuments({
-      billingMonth: currentMonth,
-      billingYear: currentYear,
-      paymentStatus: "UNPAID",
-    });
-
-    const totalOverdue = overdueRecords.length;
-
-    if (totalOverdue > 0 || pendingThisMonth > 0) {
-      const summaryTitle = "📊 Daily Payment Summary";
-      const summaryMessage = `Today: ${pendingThisMonth} pending this month | ${totalOverdue} overdue students`;
-
-      for (const admin of admins) {
-        if (admin.webPushSubscription) {
-          await NotificationService.sendWebPush(admin.webPushSubscription, {
-            title: summaryTitle,
-            body: summaryMessage,
-            icon: "/icons/icon-192x192.png",
-            badge: "/icons/badge-72x72.png",
-            data: {
-              type: "daily_summary",
-              url: "/dashboard",
-              pendingCount: pendingThisMonth,
-              overdueCount: totalOverdue,
-            },
-            tag: "daily_summary",
-          });
-        }
+        console.log(
+          `Auto-marked as due: ${fee.student.name} - ${fee.month + 1}/${
+            fee.year
+          }`,
+        );
       }
     }
 
     console.log(
-      `✅ Daily reminders sent. Overdue: ${totalOverdue}, Pending: ${pendingThisMonth}`
+      `✅ Overdue check completed. Processed: ${pendingFees.length} pending fees`,
     );
   } catch (error) {
-    console.error("❌ Error in daily reminder job:", error);
+    console.error("❌ Error in overdue payment check:", error);
   }
 });
 
-// Monthly billing generation on 1st of every month
-cron.schedule("0 0 1 * *", async () => {
-  console.log("📋 Monthly Billing Generation Started");
+// 4. Advance application check - Every day at 11:00
+cron.schedule("0 11 * * *", async () => {
+  console.log("💰 Advance application check job started");
 
   try {
-    const LedgerService = (await import("../services/ledger.service.js"))
-      .default;
-    await LedgerService.generateMonthlyInvoices();
-    console.log("✅ Monthly billing generated successfully");
-  } catch (error) {
-    console.error("❌ Error in monthly billing job:", error);
-  }
-});
+    const today = new Date();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
 
-// Hourly sync check
-cron.schedule("0 * * * *", async () => {
-  console.log("🔄 Hourly sync check");
+    // Find pending fees with advance balance
+    const pendingFees = await mongoose.model("StudentMonthlyFee").find({
+      month: currentMonth,
+      year: currentYear,
+      status: "PENDING",
+      coveredByAdvance: false,
+    });
 
-  try {
-    const io = require("socket.io").io;
-    if (io) {
-      const connectedAdmins = io.sockets.adapter.rooms.get("admins")?.size || 0;
-      console.log(`Connected admins: ${connectedAdmins}`);
+    let appliedCount = 0;
+
+    for (const fee of pendingFees) {
+      try {
+        await FeeService.applyAdvanceToMonth(
+          fee.studentId,
+          fee.month,
+          fee.year,
+          null, // System action
+        );
+
+        appliedCount++;
+      } catch (error) {
+        // Skip if insufficient advance or other issues
+        continue;
+      }
     }
+
+    console.log(`✅ Advance applied to ${appliedCount} fees`);
   } catch (error) {
-    console.error("Hourly sync error:", error);
+    console.error("❌ Error in advance application check:", error);
   }
 });
+
+// 5. End-of-month due students reminder - Last 3 days of month at 09:00
+cron.schedule("0 9 * * *", async () => {
+  console.log("📬 End-of-month due students reminder job started");
+
+  try {
+    const AdminReminderService = (
+      await import("../services/adminReminder.service.js")
+    ).default;
+
+    // Process end of month due reminders
+    await AdminReminderService.processEndOfMonthDueReminders();
+
+    console.log("✅ End-of-month due reminders processed");
+  } catch (error) {
+    console.error("❌ Error in end-of-month reminder processing:", error);
+  }
+});
+
+// 6. System health check - Every hour
+cron.schedule("0 * * * *", async () => {
+  console.log("🩺 System health check job started");
+
+  try {
+    const Admin = mongoose.model("Admin");
+    const connectedAdmins = req.app.get("adminTokens").size || 0;
+
+    // Check database connections
+    const dbStats = await mongoose.connection.db.stats();
+
+    // Send system status
+    await NotificationService.sendSystemAlert(
+      "System Health Check",
+      `Status: OK\nConnected Admins: ${connectedAdmins}\nDB Connections: ${dbStats.connections.current}`,
+      "INFO",
+    );
+  } catch (error) {
+    console.error("❌ Error in system health check:", error);
+  }
+});
+
+console.log("✅ All cron jobs scheduled and active");

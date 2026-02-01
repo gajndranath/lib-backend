@@ -19,8 +19,8 @@ export const authLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
   }),
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // 5 login attempts per hour
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // 15 login attempts per 15 minutes
   message: "Too many login attempts, please try again later",
   standardHeaders: true,
   legacyHeaders: false,

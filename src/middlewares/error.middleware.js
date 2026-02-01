@@ -10,11 +10,14 @@ const errorHandler = (err, req, res, next) => {
   }
 
   const response = {
-    ...error,
+    success: false,
+    statusCode: error.statusCode,
     message: error.message,
+    errors: error.errors || [],
     ...(process.env.NODE_ENV === "development" ? { stack: error.stack } : {}),
   };
 
+  // Remove the `next` call - just send the response
   return res.status(error.statusCode).json(response);
 };
 

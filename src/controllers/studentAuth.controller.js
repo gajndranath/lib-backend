@@ -1,0 +1,572 @@
+import crypto from "crypto";
+import { z } from "zod";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
+import { Student } from "../models/student.model.js";
+import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
+import FeeService from "../services/fee.service.js";
+import { sendEmail } from "../config/email.config.js";
+import admin from "firebase-admin";
+
+const otpRequestSchema = z.object({
+  email: z.string().email(),
+  purpose: z.enum(["LOGIN", "RESET", "VERIFY"]).optional(),
+});
+
+const otpVerifySchema = z.object({
+  email: z.string().email(),
+  otp: z.string().min(4).max(8),
+  setPassword: z.string().min(6).optional(),
+});
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
+
+const resetSchema = z.object({
+  email: z.string().email(),
+  otp: z.string().min(4).max(8),
+  newPassword: z.string().min(6),
+});
+
+const registerSchema = z.object({
+  name: z.string().min(2).max(100),
+  email: z.string().email(),
+  phone: z
+    .string()
+    .regex(/^\d{10}$/)
+    .optional(),
+  address: z.string().optional(),
+  fatherName: z.string().optional(),
+});
+
+const updateProfileSchema = z
+  .object({
+    name: z.string().min(2).max(100).optional(),
+    phone: z
+      .string()
+      .regex(/^\d{10}$/)
+      .optional(),
+    email: z.string().email().optional(),
+    address: z.string().optional(),
+    fatherName: z.string().optional(),
+  })
+  .strict();
+
+const OTP_EXP_MIN = 10;
+
+const generateOtp = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
+
+const hashOtp = (otp) => crypto.createHash("sha256").update(otp).digest("hex");
+
+const sendOtpEmail = async (email, otp, purpose) => {
+  const purposeText =
+    purpose === "RESET"
+      ? "password reset"
+      : purpose === "VERIFY"
+        ? "email verification"
+        : "login";
+
+  const subject = `Your ${purposeText} code`;
+  const text = `Your ${purposeText} OTP is: ${otp}\n\nThis code will expire in ${OTP_EXP_MIN} minutes.`;
+  return await sendEmail(email, subject, text);
+};
+
+export const registerStudent = asyncHandler(async (req, res) => {
+  const validation = registerSchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { name, email, phone, address, fatherName } = validation.data;
+
+  // Check if student with email already exists
+  const existingStudent = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  });
+
+  if (existingStudent) {
+    throw new ApiError(409, "Student with this email already exists");
+  }
+
+  // Generate a unique library ID
+  const lastStudent = await Student.findOne({ isDeleted: false })
+    .sort({ createdAt: -1 })
+    .select("libraryId");
+
+  let libraryId;
+  if (lastStudent && lastStudent.libraryId) {
+    const lastIdNumber = parseInt(lastStudent.libraryId.replace(/\D/g, ""));
+    libraryId = `LIB${String(lastIdNumber + 1).padStart(4, "0")}`;
+  } else {
+    libraryId = "LIB0001";
+  }
+
+  // Create new student (inactive until email verified)
+  const student = await Student.create({
+    libraryId,
+    name,
+    email: email.toLowerCase(),
+    phone,
+    address,
+    fatherName,
+    monthlyFee: 0, // Default fee, can be updated by admin later
+    status: "inactive",
+    emailVerified: false,
+  });
+
+  // Generate and send OTP
+  const otp = generateOtp();
+  const hashedOtp = hashOtp(otp);
+  const otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
+
+  student.otpHash = hashedOtp;
+  student.otpExpiresAt = otpExpiresAt;
+  student.otpPurpose = "VERIFY";
+  await student.save();
+
+  await sendOtpEmail(email, otp, "VERIFY");
+
+  return res
+    .status(201)
+    .json(
+      new ApiResponse(
+        201,
+        { email: student.email, libraryId: student.libraryId },
+        "Registration successful. OTP sent to email.",
+      ),
+    );
+});
+
+export const requestEmailOtp = asyncHandler(async (req, res) => {
+  const validation = otpRequestSchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { email, purpose = "LOGIN" } = validation.data;
+
+  const student = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  }).select("+password");
+
+  if (!student || !student.email) {
+    return res
+      .status(200)
+      .json(new ApiResponse(200, null, "OTP sent if account exists"));
+  }
+
+  const otp = generateOtp();
+  student.otpHash = hashOtp(otp);
+  student.otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
+  student.otpPurpose = purpose;
+
+  await student.save({ validateBeforeSave: false });
+  await sendOtpEmail(student.email, otp, purpose);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "OTP sent successfully"));
+});
+
+export const verifyEmailOtp = asyncHandler(async (req, res) => {
+  const validation = otpVerifySchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { email, otp, setPassword } = validation.data;
+
+  const student = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  }).select("+password");
+
+  if (!student || !student.otpHash || !student.otpExpiresAt) {
+    throw new ApiError(400, "Invalid or expired OTP");
+  }
+
+  if (student.otpExpiresAt < new Date()) {
+    throw new ApiError(400, "OTP expired");
+  }
+
+  const incomingHash = hashOtp(otp);
+  if (incomingHash !== student.otpHash) {
+    throw new ApiError(400, "Invalid OTP");
+  }
+
+  student.emailVerified = true;
+  student.otpHash = undefined;
+  student.otpExpiresAt = undefined;
+  student.otpPurpose = undefined;
+
+  if (setPassword) {
+    student.password = setPassword;
+  }
+
+  await student.save();
+
+  const accessToken = student.generateAccessToken();
+  const safeStudent = await Student.findById(student._id).select(
+    "-password -otpHash -otpExpiresAt -otpPurpose",
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { student: safeStudent, accessToken },
+        "OTP verified successfully",
+      ),
+    );
+});
+
+export const loginStudent = asyncHandler(async (req, res) => {
+  const validation = loginSchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { email, password } = validation.data;
+  const student = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  }).select("+password");
+
+  if (!student) throw new ApiError(404, "Student not found");
+
+  if (!student.emailVerified) {
+    throw new ApiError(403, "Email not verified. Request OTP to continue.");
+  }
+
+  if (!student.password) {
+    throw new ApiError(403, "Password not set. Verify OTP to set password.");
+  }
+
+  const isPasswordValid = await student.isPasswordCorrect(password);
+  if (!isPasswordValid) throw new ApiError(401, "Invalid credentials");
+
+  const accessToken = student.generateAccessToken();
+  const safeStudent = await Student.findById(student._id).select(
+    "-password -otpHash -otpExpiresAt -otpPurpose",
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { student: safeStudent, accessToken },
+        "Login successful",
+      ),
+    );
+});
+
+export const requestPasswordReset = asyncHandler(async (req, res) => {
+  const validation = otpRequestSchema.safeParse({
+    ...req.body,
+    purpose: "RESET",
+  });
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { email } = validation.data;
+  const student = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  });
+
+  if (!student || !student.email) {
+    return res
+      .status(200)
+      .json(new ApiResponse(200, null, "OTP sent if account exists"));
+  }
+
+  const otp = generateOtp();
+  student.otpHash = hashOtp(otp);
+  student.otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
+  student.otpPurpose = "RESET";
+
+  await student.save({ validateBeforeSave: false });
+  await sendOtpEmail(student.email, otp, "RESET");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "OTP sent successfully"));
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const validation = resetSchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const { email, otp, newPassword } = validation.data;
+
+  const student = await Student.findOne({
+    email: email.toLowerCase(),
+    isDeleted: false,
+  }).select("+password");
+
+  if (!student || !student.otpHash || !student.otpExpiresAt) {
+    throw new ApiError(400, "Invalid or expired OTP");
+  }
+
+  if (student.otpPurpose !== "RESET") {
+    throw new ApiError(400, "OTP not valid for password reset");
+  }
+
+  if (student.otpExpiresAt < new Date()) {
+    throw new ApiError(400, "OTP expired");
+  }
+
+  const incomingHash = hashOtp(otp);
+  if (incomingHash !== student.otpHash) {
+    throw new ApiError(400, "Invalid OTP");
+  }
+
+  student.password = newPassword;
+  student.otpHash = undefined;
+  student.otpExpiresAt = undefined;
+  student.otpPurpose = undefined;
+
+  await student.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Password reset successful"));
+});
+
+export const getStudentProfile = asyncHandler(async (req, res) => {
+  return res
+    .status(200)
+    .json(new ApiResponse(200, req.student, "Student profile fetched"));
+});
+
+export const updateStudentProfile = asyncHandler(async (req, res) => {
+  const validation = updateProfileSchema.safeParse(req.body);
+  if (!validation.success) {
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
+
+  const updates = validation.data;
+  const student = await Student.findById(req.student._id).select(
+    "-password -otpHash -otpExpiresAt -otpPurpose",
+  );
+
+  if (!student) throw new ApiError(404, "Student not found");
+
+  if (updates.email && updates.email !== student.email) {
+    student.email = updates.email.toLowerCase();
+    student.emailVerified = false;
+  }
+
+  if (updates.phone && updates.phone !== student.phone) {
+    student.phone = updates.phone;
+    student.phoneVerified = false;
+  }
+
+  student.name = updates.name ?? student.name;
+  student.address = updates.address ?? student.address;
+  student.fatherName = updates.fatherName ?? student.fatherName;
+
+  await student.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, student, "Profile updated successfully"));
+});
+
+export const getStudentDashboard = asyncHandler(async (req, res) => {
+  const studentId = req.student._id;
+
+  const [feeSummary, recentPayments] = await Promise.all([
+    FeeService.getStudentFeeSummary(studentId),
+    StudentMonthlyFee.find({ studentId, status: "PAID" })
+      .sort({ paymentDate: -1, createdAt: -1 })
+      .limit(6)
+      .lean(),
+  ]);
+
+  const dueItems = await StudentMonthlyFee.find({
+    studentId,
+    status: "DUE",
+  })
+    .sort({ year: -1, month: -1 })
+    .limit(3)
+    .lean();
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        student: req.student,
+        feeSummary,
+        recentPayments,
+        dueItems,
+      },
+      "Student dashboard fetched",
+    ),
+  );
+});
+
+export const getPaymentHistory = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20 } = req.query;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+
+  const [payments, total] = await Promise.all([
+    StudentMonthlyFee.find({ studentId: req.student._id })
+      .sort({ year: -1, month: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean(),
+    StudentMonthlyFee.countDocuments({ studentId: req.student._id }),
+  ]);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        payments,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+      "Payment history fetched",
+    ),
+  );
+});
+
+export const getStudentNotifications = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20, unreadOnly = false } = req.query;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+
+  const Notification = (await import("../models/notification.model.js"))
+    .default;
+
+  const query = { userId: req.student._id };
+  if (unreadOnly === "true") {
+    query.read = false;
+  }
+
+  const [notifications, total] = await Promise.all([
+    Notification.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean(),
+    Notification.countDocuments(query),
+  ]);
+
+  const unreadCount = await Notification.countDocuments({
+    userId: req.student._id,
+    read: false,
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        notifications,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+        unreadCount,
+      },
+      "Notification history fetched",
+    ),
+  );
+});
+
+export const markStudentNotificationRead = asyncHandler(async (req, res) => {
+  const { notificationId } = req.params;
+
+  const Notification = (await import("../models/notification.model.js"))
+    .default;
+
+  const notification = await Notification.findById(notificationId);
+
+  if (!notification) {
+    throw new ApiError(404, "Notification not found");
+  }
+
+  if (notification.userId.toString() !== req.student._id.toString()) {
+    throw new ApiError(403, "Not authorized to update this notification");
+  }
+
+  await notification.markAsRead();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, notification, "Notification marked as read"));
+});
+
+export const markAllStudentNotificationsRead = asyncHandler(
+  async (req, res) => {
+    const Notification = (await import("../models/notification.model.js"))
+      .default;
+
+    await Notification.updateMany(
+      { userId: req.student._id, read: false },
+      { $set: { read: true, readAt: new Date() } },
+    );
+
+    const unreadCount = await Notification.countDocuments({
+      userId: req.student._id,
+      read: false,
+    });
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { unreadCount },
+          "All notifications marked as read",
+        ),
+      );
+  },
+);
+
+export const verifyPhoneWithFirebase = asyncHandler(async (req, res) => {
+  const { idToken } = req.body;
+
+  if (!idToken) {
+    throw new ApiError(400, "idToken is required");
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const phoneNumber = decoded.phone_number;
+
+    if (!phoneNumber) {
+      throw new ApiError(400, "Phone number not found in token");
+    }
+
+    const student = await Student.findById(req.student._id);
+    if (!student) throw new ApiError(404, "Student not found");
+
+    student.phone = student.phone || phoneNumber.replace(/\D/g, "").slice(-10);
+    student.phoneVerified = true;
+    await student.save();
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, student, "Phone verified successfully"));
+  } catch (error) {
+    throw new ApiError(400, error?.message || "Phone verification failed");
+  }
+});

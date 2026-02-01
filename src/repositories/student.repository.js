@@ -1,7 +1,10 @@
 import { Student } from "../models/student.model.js";
-import { Ledger } from "../models/ledger.model.js";
+import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
+import { AdvanceBalance } from "../models/advanceBalance.model.js";
+import { DueRecord } from "../models/dueRecord.model.js";
 
 class StudentRepository {
+  // Find active students with billing day
   static async findActiveStudentsWithBillingDay(day) {
     return await Student.find({
       billingDay: day,
@@ -10,43 +13,68 @@ class StudentRepository {
     });
   }
 
-  static async getStudentLedger(studentId, month, year) {
-    return await Ledger.findOne({
+  // Get student monthly fee
+  static async getStudentMonthlyFee(studentId, month, year) {
+    return await StudentMonthlyFee.findOne({
       studentId,
-      billingMonth: month,
-      billingYear: year,
+      month,
+      year,
     });
   }
 
-  static async updateLedgerStatus(studentId, month, year, data) {
-    return await Ledger.findOneAndUpdate(
-      { studentId, billingMonth: month, billingYear: year },
+  // Update monthly fee status
+  static async updateMonthlyFeeStatus(studentId, month, year, data) {
+    return await StudentMonthlyFee.findOneAndUpdate(
+      { studentId, month, year },
       { $set: data },
       { new: true, upsert: true }
     );
   }
 
-  static async getStudentWithLedgers(studentId, limit = 12) {
-    return await Student.findById(studentId).lean();
+  // Get student with fee history
+  static async getStudentWithFeeHistory(studentId, limit = 12) {
+    const student = await Student.findById(studentId).lean();
+
+    if (!student) return null;
+
+    const monthlyFees = await StudentMonthlyFee.find({ studentId })
+      .sort({ year: -1, month: -1 })
+      .limit(limit)
+      .lean();
+
+    const advanceBalance = await AdvanceBalance.findOne({ studentId }).lean();
+    const dueRecord = await DueRecord.findOne({
+      studentId,
+      resolved: false,
+    }).lean();
+
+    return {
+      ...student,
+      monthlyFees,
+      advanceBalance,
+      dueRecord,
+    };
   }
 
-  static async getStudentsLedgers(studentIds, month, year) {
-    return await Ledger.find({
+  // Get multiple students' fees
+  static async getStudentsMonthlyFees(studentIds, month, year) {
+    return await StudentMonthlyFee.find({
       studentId: { $in: studentIds },
-      billingMonth: month,
-      billingYear: year,
+      month,
+      year,
     }).lean();
   }
 
+  // Find overdue students
   static async findOverdueStudents(daysOverdue = 30) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysOverdue);
 
-    return await Ledger.aggregate([
+    return await StudentMonthlyFee.aggregate([
       {
         $match: {
-          paymentStatus: "UNPAID",
-          createdAt: { $lte: cutoffDate },
+          status: "DUE",
+          updatedAt: { $lte: cutoffDate },
         },
       },
       {
@@ -61,7 +89,6 @@ class StudentRepository {
       {
         $match: {
           "student.status": "ACTIVE",
-          "student.reminderPaused": false,
           "student.isDeleted": false,
         },
       },
@@ -70,14 +97,14 @@ class StudentRepository {
           _id: 1,
           studentId: 1,
           studentName: "$student.name",
-          dueAmount: 1,
-          billingMonth: 1,
-          billingYear: 1,
-          createdAt: 1,
+          totalAmount: { $add: ["$baseFee", "$dueCarriedForwardAmount"] },
+          month: 1,
+          year: 1,
+          updatedAt: 1,
           daysOverdue: {
             $floor: {
               $divide: [
-                { $subtract: [new Date(), "$createdAt"] },
+                { $subtract: [new Date(), "$updatedAt"] },
                 24 * 60 * 60 * 1000,
               ],
             },
@@ -86,6 +113,34 @@ class StudentRepository {
       },
       { $sort: { daysOverdue: -1 } },
     ]);
+  }
+
+  // Get advance balance
+  static async getAdvanceBalance(studentId) {
+    return await AdvanceBalance.findOne({ studentId });
+  }
+
+  // Update advance balance
+  static async updateAdvanceBalance(studentId, data) {
+    return await AdvanceBalance.findOneAndUpdate(
+      { studentId },
+      { $set: data },
+      { new: true, upsert: true }
+    );
+  }
+
+  // Get due record
+  static async getDueRecord(studentId) {
+    return await DueRecord.findOne({ studentId, resolved: false });
+  }
+
+  // Update due record
+  static async updateDueRecord(studentId, data) {
+    return await DueRecord.findOneAndUpdate(
+      { studentId },
+      { $set: data },
+      { new: true, upsert: true }
+    );
   }
 }
 
