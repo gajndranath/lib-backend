@@ -21,7 +21,9 @@ const server = http.createServer(app);
 // Socket.io initialization with CORS
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(",") || ["http://localhost:3000"],
+    origin: process.env.CORS_ORIGIN?.split(",") || [
+      "https://lib-frontend-roan.vercel.app/",
+    ],
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Authorization", "Content-Type"],
@@ -56,19 +58,19 @@ connectDB()
       console.log(
         `📧 Email service: ${
           process.env.EMAIL_USER ? "✅ Configured" : "❌ Not configured"
-        }`
+        }`,
       );
       console.log(
         `🔥 Firebase: ${
           process.env.FIREBASE_PROJECT_ID
             ? "✅ Configured"
             : "❌ Not configured"
-        }`
+        }`,
       );
       console.log(
         `🔔 Web Push: ${
           process.env.PUBLIC_VAPID_KEY ? "✅ Configured" : "❌ Not configured"
-        }`
+        }`,
       );
       console.log(`🔌 Socket.IO server is listening`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
