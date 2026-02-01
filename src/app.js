@@ -30,7 +30,7 @@ app.use(apiLimiter);
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN?.split(",") || [
-      "https://lib-frontend-roan.vercel.app/",
+      "https://lib-frontend-roan.vercel.app",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
