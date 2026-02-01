@@ -155,10 +155,9 @@ studentSchema.methods.archive = function (reason) {
 };
 
 // Password hashing before saving
-studentSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
+studentSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
   this.password = await bcrypt.hash(this.password, 10);
-  next();
 });
 
 // Password verification method
@@ -189,31 +188,26 @@ studentSchema.methods.reactivate = function () {
 };
 
 // Pre-save hook to validate seat availability
-studentSchema.pre("save", async function (next) {
-  try {
-    // Only validate if slotId or status is being modified
-    if (this.isModified("slotId") || this.isModified("status")) {
-      // Only validate for active students
-      if (this.status === "ACTIVE") {
-        const Slot = mongoose.model("Slot");
-        const slot = await Slot.findById(this.slotId);
+studentSchema.pre("save", async function () {
+  // Only validate if slotId or status is being modified
+  if (this.isModified("slotId") || this.isModified("status")) {
+    // Only validate for active students
+    if (this.status === "ACTIVE") {
+      const Slot = mongoose.model("Slot");
+      const slot = await Slot.findById(this.slotId);
 
-        if (slot) {
-          const occupiedSeats = await mongoose.model("Student").countDocuments({
-            slotId: this.slotId,
-            status: "ACTIVE",
-            _id: { $ne: this._id },
-          });
+      if (slot) {
+        const occupiedSeats = await mongoose.model("Student").countDocuments({
+          slotId: this.slotId,
+          status: "ACTIVE",
+          _id: { $ne: this._id },
+        });
 
-          if (occupiedSeats >= slot.totalSeats) {
-            throw new Error(`Slot "${slot.name}" is full. No seats available.`);
-          }
+        if (occupiedSeats >= slot.totalSeats) {
+          throw new Error(`Slot "${slot.name}" is full. No seats available.`);
         }
       }
     }
-    next();
-  } catch (error) {
-    next(error);
   }
 });
 
