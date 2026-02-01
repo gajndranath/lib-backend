@@ -29,7 +29,9 @@ app.use(apiLimiter);
 // CORS configuration
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN?.split(",") || ["http://localhost:3000"],
+    origin: process.env.CORS_ORIGIN?.split(",") || [
+      "https://lib-frontend-roan.vercel.app/",
+    ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
@@ -42,10 +44,20 @@ app.use(
   }),
 );
 
-// Body parsers
+// Body parser middleware
 app.use(express.json({ limit: "16kb" }));
-app.use(express.urlencoded({ extended: true, limit: "16kb" }));
-app.use(cookieParser());
+app.use(express.urlencoded({ limit: "16kb", extended: true }));
+
+// CORS middleware
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN || "https://lib-frontend-roan.vercel.app/",
+    credentials: true,
+  }),
+);
+
+// Rate limiter middleware
+app.use(rateLimiter);
 
 // Import routes
 import studentRouter from "./routes/student.routes.js";
@@ -104,11 +116,13 @@ app.get("/system/info", (req, res) => {
   });
 });
 
-// 404 handler
+// 404 handler - must come before error handler
 app.use((req, res, next) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`,
+    statusCode: 404,
+    message: "Route not found",
+    errors: [],
   });
 });
 
