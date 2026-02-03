@@ -8,6 +8,7 @@ import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
 import FeeService from "../services/fee.service.js";
 import { sendEmail } from "../config/email.config.js";
 import admin from "firebase-admin";
+import { getVapidPublicKey } from "../config/webpush.config.js";
 
 const otpRequestSchema = z.object({
   email: z.string().email(),
@@ -345,9 +346,20 @@ export const resetPassword = asyncHandler(async (req, res) => {
 });
 
 export const getStudentProfile = asyncHandler(async (req, res) => {
+  const student = await Student.findById(req.student._id)
+    .populate({
+      path: "slotId",
+      select: "name timeRange monthlyFee totalSeats",
+    })
+    .select("-password -otpHash -otpExpiresAt -otpPurpose");
+
+  if (!student) {
+    throw new ApiError(404, "Student not found");
+  }
+
   return res
     .status(200)
-    .json(new ApiResponse(200, req.student, "Student profile fetched"));
+    .json(new ApiResponse(200, student, "Student profile fetched"));
 });
 
 export const updateStudentProfile = asyncHandler(async (req, res) => {
@@ -385,7 +397,18 @@ export const updateStudentProfile = asyncHandler(async (req, res) => {
 });
 
 export const getStudentDashboard = asyncHandler(async (req, res) => {
-  const studentId = req.student._id;
+  const student = await Student.findById(req.student._id)
+    .populate({
+      path: "slotId",
+      select: "name timeRange monthlyFee totalSeats",
+    })
+    .select("-password -otpHash -otpExpiresAt -otpPurpose");
+
+  if (!student) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  const studentId = student._id;
 
   const [feeSummary, recentPayments] = await Promise.all([
     FeeService.getStudentFeeSummary(studentId),
@@ -407,7 +430,7 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
     new ApiResponse(
       200,
       {
-        student: req.student,
+        student,
         feeSummary,
         recentPayments,
         dueItems,
@@ -541,6 +564,58 @@ export const markAllStudentNotificationsRead = asyncHandler(
   },
 );
 
+export const getStudentVapidKey = asyncHandler(async (_req, res) => {
+  try {
+    const publicKey = getVapidPublicKey();
+    return res
+      .status(200)
+      .json(new ApiResponse(200, { publicKey }, "VAPID public key"));
+  } catch (error) {
+    throw new ApiError(500, "Web Push not configured");
+  }
+});
+
+export const saveStudentPushSubscription = asyncHandler(async (req, res) => {
+  const { subscription, type = "web", deviceInfo = {} } = req.body;
+
+  if (!subscription) {
+    throw new ApiError(400, "Subscription is required");
+  }
+
+  const update = {
+    deviceInfo,
+  };
+
+  if (type === "web") {
+    update.webPushSubscription = subscription;
+  } else if (type === "fcm") {
+    update.fcmToken = subscription.token || subscription;
+  }
+
+  await Student.findByIdAndUpdate(req.student._id, update);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Subscription saved successfully"));
+});
+
+export const removeStudentPushSubscription = asyncHandler(async (req, res) => {
+  const { type = "web" } = req.body;
+
+  const update = {};
+  if (type === "web") {
+    update.webPushSubscription = null;
+  } else if (type === "fcm") {
+    update.fcmToken = null;
+  }
+
+  await Student.findByIdAndUpdate(req.student._id, update);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Subscription removed successfully"));
+});
+
 export const verifyPhoneWithFirebase = asyncHandler(async (req, res) => {
   const { idToken } = req.body;
 
@@ -569,4 +644,136 @@ export const verifyPhoneWithFirebase = asyncHandler(async (req, res) => {
   } catch (error) {
     throw new ApiError(400, error?.message || "Phone verification failed");
   }
+});
+// Request slot change (student initiated)
+export const requestSlotChange = asyncHandler(async (req, res) => {
+  const { newSlotId, reason = "" } = req.body;
+  const SlotService = (await import("../services/slot.service.js")).default;
+
+  if (!newSlotId) {
+    throw new ApiError(400, "New slot ID is required");
+  }
+
+  const result = await SlotService.requestSlotChange(
+    req.student._id,
+    newSlotId,
+    reason,
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        result,
+        "Slot change request submitted successfully",
+      ),
+    );
+});
+
+// Get student's slot change history
+export const getMySlotChangeHistory = asyncHandler(async (req, res) => {
+  const SlotService = (await import("../services/slot.service.js")).default;
+
+  const history = await SlotService.getStudentSlotHistory(req.student._id);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, history, "Slot change history fetched successfully"),
+    );
+});
+
+// List students for chat (student view)
+export const listChatStudents = asyncHandler(async (_req, res) => {
+  const students = await Student.find({ status: "ACTIVE", isDeleted: false })
+    .select("_id name slotId")
+    .lean();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, students, "Students fetched"));
+});
+
+// List admins for chat (student view)
+export const listChatAdmins = asyncHandler(async (_req, res) => {
+  const Admin = (await import("../models/admin.model.js")).Admin;
+  const cacheService = (await import("../utils/cache.js")).default;
+
+  try {
+    // Try to get from cache first
+    const cacheKey = "chat:admins:list";
+    let admins = await cacheService.get(cacheKey);
+
+    if (admins) {
+      console.log("Admins from cache");
+      return res
+        .status(200)
+        .json(new ApiResponse(200, admins, "Admins fetched"));
+    }
+
+    console.log("Fetching admins from database");
+
+    // Try to get active admins first
+    admins = await Admin.find({ isActive: true })
+      .select("_id username email")
+      .lean();
+
+    console.log("Active admins found:", admins.length);
+
+    // If no active admins, also check inactive ones (fallback for development)
+    if (admins.length === 0) {
+      console.log("No active admins found, checking all admins...");
+      admins = await Admin.find({})
+        .select("_id username email isActive")
+        .lean();
+    }
+
+    // Cache for 10 minutes
+    await cacheService.set(cacheKey, admins, 10 * 60);
+
+    return res.status(200).json(new ApiResponse(200, admins, "Admins fetched"));
+  } catch (error) {
+    console.error("Error in listChatAdmins:", error);
+    throw error;
+  }
+});
+
+// Get student payment receipt
+export const getPaymentReceipt = asyncHandler(async (req, res) => {
+  const { month, year } = req.params;
+  const studentId = req.student._id;
+
+  const FeeService = (await import("../services/fee.service.js")).default;
+
+  const receipt = await FeeService.generateReceipt(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, receipt, "Receipt generated successfully"));
+});
+
+// Download student payment receipt PDF
+export const downloadPaymentReceiptPDF = asyncHandler(async (req, res) => {
+  const { month, year } = req.params;
+  const studentId = req.student._id;
+
+  const FeeService = (await import("../services/fee.service.js")).default;
+
+  const html = await FeeService.getReceiptHTML(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+  );
+
+  res.setHeader("Content-Type", "text/html");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="receipt-${month}-${year}.html"`,
+  );
+  res.send(html);
 });

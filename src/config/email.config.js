@@ -19,6 +19,7 @@ export const initializeEmail = () => {
       return null;
     }
 
+    // ✅ RULE 8: Pooled transporter (not per-request clients)
     transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
       port: parseInt(process.env.EMAIL_PORT || "587"),
@@ -26,6 +27,13 @@ export const initializeEmail = () => {
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
+      },
+      // ✅ RULE 8: Connection pooling config
+      pool: {
+        maxConnections: 10, // Optimized for free tier
+        maxMessages: 100, // Max per connection
+        rateDelta: 1000, // Rate limit window
+        rateLimit: 14, // Connections per window
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
@@ -41,7 +49,15 @@ export const initializeEmail = () => {
         console.error("❌ Email configuration error:", error);
         transporter = null;
       } else {
-        console.log("✅ Email server is ready to send messages");
+        console.log("✅ Email server ready (pooled)");
+      }
+    });
+
+    // ✅ RULE 8: Close on shutdown
+    process.on("SIGTERM", () => {
+      if (transporter) {
+        transporter.close();
+        console.log("✅ Email transporter closed");
       }
     });
 
@@ -100,14 +116,14 @@ export const sendEmail = async (to, subject, text, html = null) => {
         <body>
           <div class="container">
             <div class="header">
-              <h1>Library Management System</h1>
+              <h1>Gurukal Library</h1>
             </div>
             <div class="content">
               ${text.replace(/\n/g, "<br>")}
             </div>
             <div class="footer">
               <p>This is an automated message. Please do not reply to this email.</p>
-              <p>&copy; ${new Date().getFullYear()} Library Management System. All rights reserved.</p>
+              <p>&copy; ${new Date().getFullYear()} Library Management System by Gajendra Nath Tripathi. All rights reserved.</p>
             </div>
           </div>
         </body>

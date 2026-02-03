@@ -144,6 +144,11 @@ class ReminderService {
         }
 
         // Send notification via all channels
+        const notificationType =
+          reminder.type === ReminderType.DUE
+            ? "PAYMENT_DUE"
+            : "PAYMENT_REMINDER";
+
         const notificationResults =
           await NotificationService.sendMultiChannelNotification({
             studentId: reminder.studentId._id,
@@ -151,7 +156,7 @@ class ReminderService {
             email: reminder.studentId.email,
             title: reminder.title,
             message: reminder.message,
-            type: reminder.type,
+            type: notificationType,
             metadata: {
               month: reminder.month,
               year: reminder.year,
@@ -169,10 +174,28 @@ class ReminderService {
           }
         }
 
-        // If reminder is one-time (like DUE), mark as resolved
+        // For DUE reminders, keep sending daily until payment is resolved
         if (reminder.type === ReminderType.DUE) {
-          reminder.resolved = true;
-          await reminder.save();
+          const dueRecord = await DueRecord.findOne({
+            studentId: reminder.studentId._id,
+            resolved: false,
+          });
+
+          if (!dueRecord) {
+            reminder.resolved = true;
+            await reminder.save();
+          } else {
+            const nextTrigger = new Date();
+            nextTrigger.setDate(nextTrigger.getDate() + 1);
+            nextTrigger.setHours(
+              DEFAULT_REMINDER_HOUR,
+              DEFAULT_REMINDER_MINUTE,
+              0,
+              0,
+            );
+            reminder.triggerDate = nextTrigger;
+            await reminder.save();
+          }
         }
 
         results.sent++;

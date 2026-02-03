@@ -113,8 +113,8 @@ export const getNotificationHistory = asyncHandler(async (req, res) => {
         },
         unreadCount,
       },
-      "Notification history fetched"
-    )
+      "Notification history fetched",
+    ),
   );
 });
 
@@ -149,7 +149,7 @@ export const markAllAsRead = asyncHandler(async (req, res) => {
 
   await Notification.updateMany(
     { userId: req.admin._id, read: false },
-    { $set: { read: true, readAt: new Date() } }
+    { $set: { read: true, readAt: new Date() } },
   );
 
   const unreadCount = await Notification.getUnreadCount(req.admin._id);
@@ -157,7 +157,7 @@ export const markAllAsRead = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(
-      new ApiResponse(200, { unreadCount }, "All notifications marked as read")
+      new ApiResponse(200, { unreadCount }, "All notifications marked as read"),
     );
 });
 
@@ -166,7 +166,7 @@ export const getNotificationPreferences = asyncHandler(async (req, res) => {
   const Admin = (await import("../models/admin.model.js")).Admin;
 
   const admin = await Admin.findById(req.admin._id).select(
-    "notificationPreferences"
+    "notificationPreferences",
   );
 
   if (!admin) {
@@ -179,8 +179,8 @@ export const getNotificationPreferences = asyncHandler(async (req, res) => {
       new ApiResponse(
         200,
         admin.notificationPreferences,
-        "Notification preferences fetched"
-      )
+        "Notification preferences fetched",
+      ),
     );
 });
 
@@ -193,7 +193,7 @@ export const updateNotificationPreferences = asyncHandler(async (req, res) => {
   const admin = await Admin.findByIdAndUpdate(
     req.admin._id,
     { notificationPreferences: preferences },
-    { new: true }
+    { new: true },
   ).select("notificationPreferences");
 
   return res
@@ -202,7 +202,120 @@ export const updateNotificationPreferences = asyncHandler(async (req, res) => {
       new ApiResponse(
         200,
         admin.notificationPreferences,
-        "Notification preferences updated"
-      )
+        "Notification preferences updated",
+      ),
     );
+});
+
+// Send direct notification to student
+export const sendDirectNotification = asyncHandler(async (req, res) => {
+  const { studentId, channel, title, message } = req.body;
+
+  if (!studentId || !channel) {
+    throw new ApiError(400, "Student ID and channel are required");
+  }
+
+  const Student = (await import("../models/student.model.js")).Student;
+  const student = await Student.findById(studentId);
+
+  if (!student) {
+    throw new ApiError(404, "Student not found");
+  }
+
+  const notificationTitle = title || `Payment Reminder - ${student.name}`;
+  const notificationMessage =
+    message ||
+    `Dear ${student.name}, this is a reminder to pay your pending fee. Please pay at your earliest convenience.`;
+
+  const results = {};
+
+  try {
+    if (channel === "all") {
+      // Send via all available channels
+      const multiChannelResult =
+        await NotificationService.sendMultiChannelNotification({
+          studentId: student._id,
+          studentName: student.name,
+          email: student.email,
+          title: notificationTitle,
+          message: notificationMessage,
+          type: "PAYMENT_DUE",
+          metadata: {
+            phone: student.phone,
+            fcmToken: student.fcmToken,
+            webPushSubscription: student.webPushSubscription,
+            sentBy: req.admin._id,
+          },
+        });
+      results.all = multiChannelResult;
+    } else if (channel === "email") {
+      if (!student.email) {
+        throw new ApiError(400, "Student email not available");
+      }
+      results.email = await NotificationService.sendMultiChannelNotification({
+        studentId: student._id,
+        studentName: student.name,
+        email: student.email,
+        title: notificationTitle,
+        message: notificationMessage,
+        type: "PAYMENT_DUE",
+        metadata: {
+          phone: null,
+          fcmToken: null,
+          webPushSubscription: null,
+          sentBy: req.admin._id,
+        },
+      });
+    } else if (channel === "sms") {
+      if (!student.phone) {
+        throw new ApiError(400, "Student phone not available");
+      }
+      results.sms = await NotificationService.sendSMS(
+        student.phone,
+        notificationMessage,
+      );
+    } else if (channel === "push") {
+      if (!student.fcmToken) {
+        throw new ApiError(400, "Student push token not available");
+      }
+      results.push = await NotificationService.sendFCMPush(
+        student.fcmToken,
+        {
+          title: notificationTitle,
+          body: notificationMessage,
+        },
+        {
+          type: "PAYMENT_DUE",
+          studentId: student._id.toString(),
+          sentBy: req.admin._id.toString(),
+        },
+      );
+    } else if (channel === "in-app") {
+      results.inApp = await NotificationService.sendInAppNotification({
+        userId: student._id,
+        title: notificationTitle,
+        message: notificationMessage,
+        type: "PAYMENT_DUE",
+        data: {
+          studentId: student._id,
+          sentBy: req.admin._id,
+        },
+      });
+    } else {
+      throw new ApiError(400, "Invalid notification channel");
+    }
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { results, student: { _id: student._id, name: student.name } },
+          "Notification sent successfully",
+        ),
+      );
+  } catch (error) {
+    console.error("Error sending direct notification:", error);
+    throw new ApiError(500, error.message || "Failed to send notification");
+  }
 });

@@ -60,13 +60,28 @@ const errorHandler = (err, req, res, next) => {
   }
 
   const statusCode = error.statusCode || 500;
-  const message = error.message || "Internal Server Error";
+  let message = error.message || "Internal Server Error";
+
+  // Don't leak sensitive information in production
+  if (process.env.NODE_ENV === "production" && statusCode === 500) {
+    message = "Internal Server Error";
+    // Log the actual error server-side for debugging
+    console.error("[PRODUCTION ERROR]", {
+      timestamp: new Date().toISOString(),
+      path: req.path,
+      method: req.method,
+      error: err.message,
+      stack: err.stack,
+    });
+  }
 
   res.status(statusCode).json({
     success: false,
     statusCode,
     message,
-    errors: error.errors || [],
+    ...(process.env.NODE_ENV !== "production" && {
+      errors: error.errors || [],
+    }),
   });
 };
 

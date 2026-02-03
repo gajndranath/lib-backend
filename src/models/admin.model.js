@@ -22,6 +22,11 @@ const adminSchema = new Schema(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Please enter a valid email"],
     },
+    phone: {
+      type: String,
+      trim: true,
+      sparse: true,
+    },
     password: {
       type: String,
       required: true,
@@ -30,6 +35,10 @@ const adminSchema = new Schema(
     refreshToken: { type: String },
     fcmToken: { type: String },
     webPushSubscription: { type: Schema.Types.Mixed },
+    publicKey: {
+      type: String,
+      trim: true,
+    },
     role: {
       type: String,
       enum: ["SUPER_ADMIN", "STAFF"],
@@ -46,7 +55,7 @@ const adminSchema = new Schema(
     isActive: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Password hashing before saving
@@ -77,7 +86,7 @@ adminSchema.methods.generateAccessToken = function () {
       username: this.username,
     },
     process.env.ACCESS_TOKEN_SECRET,
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRY },
   );
 };
 

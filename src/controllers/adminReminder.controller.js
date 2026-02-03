@@ -111,7 +111,9 @@ export const updateReminder = asyncHandler(async (req, res) => {
 export const sendReminder = asyncHandler(async (req, res) => {
   const { reminderId } = req.params;
 
-  const reminder = await AdminReminderService.sendReminder(reminderId);
+  const reminder = await AdminReminderService.sendReminder(reminderId, {
+    notifyAdmin: false,
+  });
 
   return res
     .status(200)

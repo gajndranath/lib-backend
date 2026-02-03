@@ -7,6 +7,12 @@ import { socketHandlers } from "./sockets/index.js";
 import { initializeFirebase } from "./config/firebase.config.js";
 import { initializeEmail } from "./config/email.config.js";
 import { initializeWebPush } from "./config/webpush.config.js";
+import {
+  socketOptimizationConfig,
+  SocketConnectionPoolManager,
+  setupSocketMemoryManagement,
+} from "./utils/socketOptimizer.js";
+import { monitorConnectionPool } from "./utils/queryOptimizations.js";
 import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
 
 dotenv.config({ path: "./.env" });
@@ -18,23 +24,22 @@ initializeWebPush();
 
 const server = http.createServer(app);
 
-// Socket.io initialization with CORS
+// Socket.io initialization with OPTIMIZED CONFIG
 const io = new Server(server, {
   cors: {
     origin: process.env.CORS_ORIGIN?.split(",") || [
-      "https://lib-frontend-roan.vercel.app",
+      "https://lib-frontend-roan.vercel.app/students/new",
     ],
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Authorization", "Content-Type"],
   },
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
-    skipMiddlewares: true,
-  },
-  pingTimeout: 60000,
-  pingInterval: 25000,
+  ...socketOptimizationConfig,
 });
+
+// Initialize socket connection pool manager
+const socketPoolManager = new SocketConnectionPoolManager(io);
+global.socketPoolManager = socketPoolManager;
 
 // Store for connected admin tokens
 const connectedAdminTokens = new Map();
@@ -44,12 +49,18 @@ global.io = io;
 app.set("io", io);
 app.set("adminTokens", connectedAdminTokens);
 
+// Setup socket memory management and monitoring
+setupSocketMemoryManagement(io);
+
 // Socket event handlers
 socketHandlers(io);
 
 // Database connection followed by Server Start
 connectDB()
   .then(() => {
+    // Monitor database connection pool
+    monitorConnectionPool();
+
     const PORT = process.env.PORT || 8000;
 
     server.listen(PORT, () => {
@@ -72,8 +83,11 @@ connectDB()
           process.env.PUBLIC_VAPID_KEY ? "✅ Configured" : "❌ Not configured"
         }`,
       );
-      console.log(`🔌 Socket.IO server is listening`);
+      console.log(`🔌 Socket.IO server is listening with optimized settings`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`⚙️  Rate limiting: ENABLED with per-endpoint optimization`);
+      console.log(`💾 Memory management: ENABLED`);
+      console.log(`🔄 Connection pooling: ENABLED (25 max connections)`);
     });
   })
   .catch((err) => {

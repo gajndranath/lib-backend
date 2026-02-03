@@ -30,10 +30,19 @@ const notificationSchema = new Schema(
       enum: [
         "PAYMENT_REMINDER",
         "PAYMENT_CONFIRMATION",
+        "PAYMENT_DUE",
+        "FEE_DUE",
+        "DUE_STUDENTS",
+        "ADMIN_REMINDER",
+        "END_OF_MONTH_DUE",
+        "PAYMENT_PENDING",
         "OVERDUE_ALERT",
         "STUDENT_REGISTRATION",
         "SLOT_CHANGE",
         "FEE_OVERRIDE",
+        "CHAT_MESSAGE",
+        "ANNOUNCEMENT",
+        "CALL",
         "SYSTEM_ALERT",
         "TEST",
       ],
@@ -84,7 +93,7 @@ const notificationSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Indexes
@@ -103,7 +112,7 @@ notificationSchema.methods.markAsRead = function () {
 notificationSchema.methods.markAsDelivered = function (
   channel,
   status = "DELIVERED",
-  error = null
+  error = null,
 ) {
   this.channels.push({
     channel,
@@ -132,7 +141,7 @@ notificationSchema.statics.getUnreadCount = async function (userId) {
 notificationSchema.statics.getUserNotifications = async function (
   userId,
   limit = 50,
-  skip = 0
+  skip = 0,
 ) {
   return await this.find({ userId })
     .sort({ createdAt: -1 })

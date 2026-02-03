@@ -9,17 +9,12 @@ class StudentService {
    * Register new student
    */
   static async registerStudent(studentData, adminId) {
-    console.log("Register student data:", studentData);
-    console.log("Admin ID:", adminId);
-
     try {
       // Check if phone already exists
       const existingStudent = await Student.findOne({
         phone: studentData.phone,
         isDeleted: false,
       });
-
-      console.log("Existing student check:", existingStudent);
 
       if (existingStudent) {
         throw new ApiError(
@@ -30,7 +25,6 @@ class StudentService {
 
       // Verify slot exists and has capacity
       const slot = await Slot.findById(studentData.slotId);
-      console.log("Slot found:", slot);
       if (!slot) {
         throw new ApiError(404, "Selected slot not found");
       }
@@ -57,8 +51,6 @@ class StudentService {
         ...studentData,
         createdBy: adminId,
       });
-
-      console.log("Student created:", student._id);
       // Generate initial fee record for current month
       try {
         const currentDate = new Date();
@@ -68,9 +60,7 @@ class StudentService {
           currentDate.getFullYear(),
           adminId,
         );
-        console.log("Initial fee created successfully");
       } catch (feeError) {
-        console.error("Error creating initial fee:", feeError);
         // Don't throw - student is already created
       }
 
@@ -84,9 +74,7 @@ class StudentService {
           newValue: studentData,
           metadata: { studentId: student._id },
         });
-        console.log("Action logged successfully");
       } catch (logError) {
-        console.error("Error logging action:", logError);
         // Don't throw here - we already created the student
       }
 

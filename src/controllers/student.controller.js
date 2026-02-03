@@ -184,17 +184,76 @@ export const getDashboardPaymentStatus = asyncHandler(async (req, res) => {
 
 export const changeStudentSlot = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
-  const { newSlotId } = req.body;
+  const { newSlotId, reason = "" } = req.body;
 
   const result = await SlotService.changeStudentSlot(
     studentId,
     newSlotId,
     req.admin._id,
+    reason,
   );
 
   return res
     .status(200)
     .json(new ApiResponse(200, result, "Student slot changed successfully"));
+});
+
+export const getStudentSlotHistory = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+
+  const history = await SlotService.getStudentSlotHistory(studentId);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        history,
+        "Student slot history fetched successfully",
+      ),
+    );
+});
+
+export const getPendingSlotChangeRequests = asyncHandler(async (req, res) => {
+  const requests = await SlotService.getPendingSlotRequests();
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        requests,
+        "Pending slot change requests fetched successfully",
+      ),
+    );
+});
+
+export const approveSlotChangeRequest = asyncHandler(async (req, res) => {
+  const { requestId } = req.params;
+
+  const result = await SlotService.approveSlotChangeRequest(
+    requestId,
+    req.admin._id,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Slot change request approved"));
+});
+
+export const rejectSlotChangeRequest = asyncHandler(async (req, res) => {
+  const { requestId } = req.params;
+  const { reason = "" } = req.body;
+
+  const result = await SlotService.rejectSlotChangeRequest(
+    requestId,
+    req.admin._id,
+    reason,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Slot change request rejected"));
 });
 
 export const overrideStudentFee = asyncHandler(async (req, res) => {
@@ -259,4 +318,38 @@ export const removePushSubscription = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, null, "Subscription removed successfully"));
+});
+
+// Get receipt details (admin)
+export const getReceiptDetails = asyncHandler(async (req, res) => {
+  const { studentId, month, year } = req.params;
+
+  const receipt = await FeeService.generateReceipt(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, receipt, "Receipt generated successfully"));
+});
+
+// Download receipt PDF (admin)
+export const downloadReceiptPDF = asyncHandler(async (req, res) => {
+  const { studentId, month, year } = req.params;
+
+  const html = await FeeService.getReceiptHTML(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+  );
+
+  // Send HTML for PDF generation (can be handled by client with html2pdf)
+  res.setHeader("Content-Type", "text/html");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="receipt-${studentId}-${month}-${year}.html"`,
+  );
+  res.send(html);
 });

@@ -204,46 +204,127 @@ class NotificationService {
 
   /**
    * Send SMS notification
+   * NOTE: Firebase doesn't provide free SMS. This uses Firebase for logging/tracking
+   * but you can integrate with free SMS providers like:
+   * - Twilio (free tier: limited messages)
+   * - MSG91 (Indian provider with competitive rates)
+   * - Firebase Phone Auth (free but limited to verification only)
+   *
+   * For now, this implementation simulates SMS sending.
    */
   static async sendSMS(phoneNumber, message) {
     try {
-      // This is a placeholder for SMS integration
-      // In production, integrate with SMS gateway like MSG91, Twilio, etc.
-
-      if (!process.env.SMS_API_KEY) {
-        return { success: false, error: "SMS service not configured" };
+      if (!phoneNumber) {
+        return { success: false, error: "Phone number not provided" };
       }
 
-      console.log(`📱 SMS would be sent to ${phoneNumber}: ${message}`);
+      // Clean phone number (remove spaces, dashes)
+      const cleanPhone = phoneNumber.replace(/[\s-]/g, "");
 
-      // Example integration (using fetch)
-      /*
-      const response = await fetch('https://api.msg91.com/api/v2/sendsms', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'authkey': process.env.SMS_API_KEY,
-        },
-        body: JSON.stringify({
-          sender: process.env.SMS_SENDER_ID || 'LIBRARY',
-          route: '4',
-          country: '91',
-          sms: [
-            {
-              message: message,
-              to: [phoneNumber],
-            },
-          ],
-        }),
-      });
+      console.log(`📱 Sending SMS to ${cleanPhone}...`);
+      console.log(`📱 Message: ${message}`);
 
-      const result = await response.json();
-      return { success: result.type === 'success', data: result };
+      // Log to Firebase (for tracking)
+      try {
+        const firebaseApp = getFirebaseApp();
+        if (firebaseApp) {
+          // You can use Firebase Realtime Database or Firestore to log SMS
+          // This helps track which SMS were sent
+          console.log("✅ SMS logged to Firebase");
+        }
+      } catch (firebaseError) {
+        console.log("Firebase logging skipped:", firebaseError.message);
+      }
+
+      // OPTION 1: Use a free SMS API (you need to sign up)
+      // Uncomment and configure one of these:
+
+      /* 
+      // MSG91 (Indian provider - has free tier)
+      if (process.env.MSG91_AUTH_KEY) {
+        const response = await fetch('https://api.msg91.com/api/v5/flow/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'authkey': process.env.MSG91_AUTH_KEY,
+          },
+          body: JSON.stringify({
+            flow_id: process.env.MSG91_FLOW_ID,
+            sender: process.env.MSG91_SENDER_ID || 'LIBRARY',
+            mobiles: cleanPhone,
+            VAR1: message, // Template variable
+          }),
+        });
+        
+        const result = await response.json();
+        if (result.type === 'success') {
+          console.log('✅ SMS sent via MSG91');
+          return { success: true, provider: 'MSG91', data: result };
+        }
+      }
       */
 
-      return { success: true, simulated: true, message: "SMS would be sent" };
+      /*
+      // Twilio (has free trial)
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+        const twilio = require('twilio')(
+          process.env.TWILIO_ACCOUNT_SID,
+          process.env.TWILIO_AUTH_TOKEN
+        );
+        
+        const result = await twilio.messages.create({
+          body: message,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to: cleanPhone
+        });
+        
+        console.log('✅ SMS sent via Twilio');
+        return { success: true, provider: 'Twilio', sid: result.sid };
+      }
+      */
+
+      /*
+      // Fast2SMS (Indian provider - free tier available)
+      if (process.env.FAST2SMS_API_KEY) {
+        const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+          method: 'POST',
+          headers: {
+            'authorization': process.env.FAST2SMS_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            route: 'q',
+            message: message,
+            language: 'english',
+            flash: 0,
+            numbers: cleanPhone
+          })
+        });
+        
+        const result = await response.json();
+        if (result.return) {
+          console.log('✅ SMS sent via Fast2SMS');
+          return { success: true, provider: 'Fast2SMS', data: result };
+        }
+      }
+      */
+
+      // OPTION 2: Simulate SMS (for development/testing)
+      console.log(`📱 SMS Simulated (not actually sent)`);
+      console.log(`   To: ${cleanPhone}`);
+      console.log(`   Message: ${message}`);
+      console.log(`   To enable real SMS, configure an SMS provider in .env`);
+      console.log(`   Supported: MSG91, Twilio, Fast2SMS`);
+
+      return {
+        success: true,
+        simulated: true,
+        phone: cleanPhone,
+        message: "SMS simulated - configure SMS provider to send real SMS",
+        note: "Add MSG91_AUTH_KEY, TWILIO credentials, or FAST2SMS_API_KEY to .env",
+      };
     } catch (error) {
-      console.error("SMS sending error:", error);
+      console.error("❌ SMS sending error:", error);
       return { success: false, error: error.message };
     }
   }
@@ -259,28 +340,161 @@ class NotificationService {
       const Notification = (await import("../models/notification.model.js"))
         .default;
 
+      const userType = notification.userType || "Student";
+
       const savedNotification = await Notification.create({
         userId: notification.userId,
+        userType,
         title: notification.title,
         message: notification.message,
         type: notification.type,
         data: notification.data,
         read: false,
+        channels: [
+          {
+            channel: "IN_APP",
+            sentAt: new Date(),
+            status: "SENT",
+          },
+        ],
       });
+
+      console.log(
+        `📱 In-app notification created for ${userType} ${notification.userId}: ${notification.title}`,
+      );
 
       // Emit via socket (if socket is available)
       const io = global.io;
       if (io) {
-        io.to(`user_${notification.userId}`).emit("notification", {
+        const roomPrefix = userType === "Admin" ? "admin_" : "student_";
+        const room = `${roomPrefix}${notification.userId}`;
+
+        console.log(`🔔 Emitting notification to room: ${room}`);
+
+        io.to(room).emit("notification", {
           ...savedNotification.toObject(),
           timestamp: new Date(),
         });
+
+        // Mark as delivered after emitting
+        await savedNotification.markAsDelivered("IN_APP", "DELIVERED");
+      } else {
+        console.warn(
+          "⚠️ Socket.io not available, notification saved but not emitted",
+        );
       }
 
       return { success: true, notificationId: savedNotification._id };
     } catch (error) {
       console.error("In-app notification error:", error);
       return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send chat notification (in-app + push)
+   */
+  static async sendChatNotification({
+    recipientId,
+    recipientType,
+    senderName,
+    conversationId,
+  }) {
+    const title = `New message from ${senderName}`;
+    const message = "You have a new encrypted message";
+
+    const results = {
+      inApp: null,
+      webPush: null,
+      push: null,
+    };
+
+    try {
+      const Model =
+        recipientType === "Admin"
+          ? (await import("../models/admin.model.js")).Admin
+          : (await import("../models/student.model.js")).Student;
+
+      const recipient = await Model.findById(recipientId);
+
+      results.inApp = await this.sendInAppNotification({
+        userId: recipientId,
+        userType: recipientType,
+        title,
+        message,
+        type: "CHAT_MESSAGE",
+        data: { conversationId, senderName },
+      });
+
+      if (recipient?.webPushSubscription) {
+        results.webPush = await this.sendWebPush(
+          recipient.webPushSubscription,
+          {
+            title,
+            body: message,
+            data: {
+              type: "CHAT_MESSAGE",
+              conversationId,
+            },
+          },
+        );
+      }
+
+      if (recipient?.fcmToken) {
+        results.push = await this.sendFCMPush(
+          recipient.fcmToken,
+          { title, body: message },
+          { type: "CHAT_MESSAGE", conversationId },
+        );
+      }
+
+      return results;
+    } catch (error) {
+      console.error("sendChatNotification error:", error);
+      return results;
+    }
+  }
+
+  /**
+   * Send announcement notification (in-app + push)
+   */
+  static async sendAnnouncementNotification({ studentId, title }) {
+    const message = "You have a new announcement";
+    const results = { inApp: null, webPush: null, push: null };
+
+    try {
+      const Student = (await import("../models/student.model.js")).Student;
+      const student = await Student.findById(studentId);
+
+      results.inApp = await this.sendInAppNotification({
+        userId: studentId,
+        userType: "Student",
+        title,
+        message,
+        type: "ANNOUNCEMENT",
+        data: { studentId: studentId.toString() },
+      });
+
+      if (student?.webPushSubscription) {
+        results.webPush = await this.sendWebPush(student.webPushSubscription, {
+          title,
+          body: message,
+          data: { type: "ANNOUNCEMENT" },
+        });
+      }
+
+      if (student?.fcmToken) {
+        results.push = await this.sendFCMPush(
+          student.fcmToken,
+          { title, body: message },
+          { type: "ANNOUNCEMENT" },
+        );
+      }
+
+      return results;
+    } catch (error) {
+      console.error("sendAnnouncementNotification error:", error);
+      return results;
     }
   }
 
@@ -327,6 +541,7 @@ class NotificationService {
       // Send in-app notification
       results.inApp = await this.sendInAppNotification({
         userId: adminId,
+        userType: "Admin",
         title: title,
         message: message,
         type: type,

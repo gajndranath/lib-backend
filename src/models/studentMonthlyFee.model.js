@@ -22,6 +22,14 @@ const studentMonthlyFeeSchema = new Schema(
       type: Number,
       required: true,
       min: 0,
+      get: (value) => {
+        // Round to 2 decimal places when retrieving
+        return Math.round(value * 100) / 100;
+      },
+      set: (value) => {
+        // Round to 2 decimal places when setting
+        return Math.round(value * 100) / 100;
+      },
     },
     status: {
       type: String,
@@ -37,6 +45,14 @@ const studentMonthlyFeeSchema = new Schema(
       type: Number,
       default: 0,
       min: 0,
+      get: (value) => {
+        // Round to 2 decimal places when retrieving
+        return Math.round(value * 100) / 100;
+      },
+      set: (value) => {
+        // Round to 2 decimal places when setting
+        return Math.round(value * 100) / 100;
+      },
     },
     locked: {
       type: Boolean,
@@ -58,6 +74,19 @@ const studentMonthlyFeeSchema = new Schema(
       type: String,
       trim: true,
     },
+    paidAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+      get: (value) => {
+        // Round to 2 decimal places when retrieving
+        return Math.round(value * 100) / 100;
+      },
+      set: (value) => {
+        // Round to 2 decimal places when setting
+        return Math.round(value * 100) / 100;
+      },
+    },
 
     // Audit fields
     createdBy: {
@@ -72,13 +101,13 @@ const studentMonthlyFeeSchema = new Schema(
   {
     timestamps: true,
     toJSON: { virtuals: true },
-  }
+  },
 );
 
 // Unique compound index
 studentMonthlyFeeSchema.index(
   { studentId: 1, month: 1, year: 1 },
-  { unique: true, name: "unique_monthly_fee" }
+  { unique: true, name: "unique_monthly_fee" },
 );
 
 // Indexes for queries
@@ -108,7 +137,9 @@ studentMonthlyFeeSchema.virtual("monthYear").get(function () {
 
 // Virtual for total amount
 studentMonthlyFeeSchema.virtual("totalAmount").get(function () {
-  return this.baseFee + this.dueCarriedForwardAmount;
+  const total = this.baseFee + this.dueCarriedForwardAmount;
+  // Round to 2 decimal places
+  return Math.round(total * 100) / 100;
 });
 
 // Method to mark as paid
@@ -129,5 +160,5 @@ studentMonthlyFeeSchema.methods.markAsPaid = function (paymentData) {
 
 export const StudentMonthlyFee = mongoose.model(
   "StudentMonthlyFee",
-  studentMonthlyFeeSchema
+  studentMonthlyFeeSchema,
 );

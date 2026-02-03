@@ -38,11 +38,11 @@ class AdminReminderService {
         }
 
         // Create reminder for admin
-        await AdminReminder.create({
+        const reminder = await AdminReminder.create({
           adminId: admin._id,
           type: "DUE_STUDENTS",
           title: `Student Payment Due: ${student.name}`,
-          message: `${student.name} (ID: ${student.studentId}) has not paid their fee for the months due. Total due: ₹${dueRecord.totalDueAmount}`,
+          message: `${student.name} (ID: ${student.libraryId || student._id}) has not paid their fee for the months due. Total due: ₹${dueRecord.totalDueAmount}`,
           affectedStudents: [studentId],
           dueRecords: [dueRecordId],
           schedule: {
@@ -55,13 +55,44 @@ class AdminReminderService {
           updatedBy: adminId,
         });
 
-        // Send immediate notification
-        await NotificationService.sendNotification(admin._id, {
-          title: `Student Payment Due: ${student.name}`,
-          message: `${student.name} has not paid their fee. Total due: ₹${dueRecord.totalDueAmount}`,
-          type: "FEE_DUE",
-          relatedId: studentId,
-        });
+        // Send immediate notification to admin
+        try {
+          await NotificationService.sendAdminNotification(
+            admin._id,
+            `Student Payment Due: ${student.name}`,
+            `${student.name} has not paid their fee. Total due: ₹${dueRecord.totalDueAmount}`,
+            "FEE_DUE",
+          );
+        } catch (error) {
+          console.error(
+            `Failed to notify admin ${admin._id} about student due:`,
+            error,
+          );
+        }
+
+        // Also send notification to the student (always create in-app)
+        try {
+          await NotificationService.sendMultiChannelNotification({
+            studentId: student._id,
+            studentName: student.name,
+            email: student.email,
+            title: `Payment Due: ${dueRecord.totalDueAmount}`,
+            message: `Dear ${student.name}, your outstanding fee of ₹${dueRecord.totalDueAmount} is due. Please pay at your earliest convenience.`,
+            type: "PAYMENT_DUE",
+            metadata: {
+              phone: student.phone,
+              fcmToken: student.fcmToken,
+              webPushSubscription: student.webPushSubscription,
+              dueAmount: dueRecord.totalDueAmount,
+              reminderId: reminder._id,
+            },
+          });
+        } catch (error) {
+          console.error(
+            `Failed to notify student ${studentId} about payment due:`,
+            error,
+          );
+        }
       }
     } catch (error) {
       console.error("Error creating due student reminder:", error);
@@ -301,7 +332,10 @@ class AdminReminderService {
           status: { $in: ["DUE", "PENDING"] },
           locked: false,
         })
-          .populate("studentId", "name studentId")
+          .populate(
+            "studentId",
+            "name libraryId email phone fcmToken webPushSubscription",
+          )
           .lean();
 
         if (dueStudents.length > 0) {
@@ -344,12 +378,46 @@ class AdminReminderService {
               isActive: true,
             });
 
-            // Send notification
-            await NotificationService.sendNotification(admin._id, {
-              title: reminder.title,
-              message: reminder.message,
-              type: "END_OF_MONTH_DUE",
-            });
+            // Send notification to admin
+            try {
+              await NotificationService.sendAdminNotification(
+                admin._id,
+                reminder.title,
+                reminder.message,
+                "END_OF_MONTH_DUE",
+              );
+            } catch (error) {
+              console.error(
+                `Failed to notify admin about end-of-month due:`,
+                error,
+              );
+            }
+
+            // Send reminders to all due students
+            for (const studentFee of dueStudents) {
+              try {
+                await NotificationService.sendMultiChannelNotification({
+                  studentId: studentFee.studentId._id,
+                  studentName: studentFee.studentId.name,
+                  email: studentFee.studentId.email,
+                  title: "Month-End Payment Reminder",
+                  message: `Dear ${studentFee.studentId.name}, the month is ending. Please pay your pending fee to avoid late charges.`,
+                  type: "END_OF_MONTH_DUE",
+                  metadata: {
+                    phone: studentFee.studentId.phone,
+                    fcmToken: studentFee.studentId.fcmToken,
+                    webPushSubscription:
+                      studentFee.studentId.webPushSubscription,
+                    reminderId: reminder._id,
+                  },
+                });
+              } catch (error) {
+                console.error(
+                  `Failed to send end-of-month reminder to student ${studentFee.studentId._id}:`,
+                  error,
+                );
+              }
+            }
           }
         }
       }
@@ -389,8 +457,12 @@ class AdminReminderService {
   /**
    * Send reminder notifications (can be called manually or by cron)
    */
-  static async sendReminder(reminderId) {
-    const reminder = await AdminReminder.findById(reminderId);
+  static async sendReminder(reminderId, options = {}) {
+    const { notifyAdmin = true } = options;
+    const reminder = await AdminReminder.findById(reminderId).populate(
+      "affectedStudents",
+      "name email phone fcmToken webPushSubscription",
+    );
 
     if (!reminder) {
       throw new ApiError(404, "Reminder not found");
@@ -401,39 +473,114 @@ class AdminReminderService {
     }
 
     const deliveryChannels = reminder.deliverVia || ["IN_APP"];
+    const affectedStudents = reminder.affectedStudents || [];
 
-    // Send via each channel
-    for (const channel of deliveryChannels) {
-      try {
-        if (channel === "IN_APP") {
-          await NotificationService.sendNotification(reminder.adminId, {
-            title: reminder.title,
-            message: reminder.message,
-            type: reminder.type,
-            relatedId: reminder._id,
+    // Send notifications to each affected student
+    for (const student of affectedStudents) {
+      // Send via each channel
+      for (const channel of deliveryChannels) {
+        try {
+          let result;
+
+          if (channel === "IN_APP") {
+            result = await NotificationService.sendInAppNotification({
+              userId: student._id,
+              title: reminder.title,
+              message: reminder.message,
+              type: reminder.type,
+              data: {
+                reminderId: reminder._id,
+                studentId: student._id,
+              },
+            });
+
+            // Also send web push for PWA if available
+            if (student.webPushSubscription) {
+              await NotificationService.sendWebPush(
+                student.webPushSubscription,
+                {
+                  title: reminder.title,
+                  body: reminder.message,
+                  data: {
+                    type: reminder.type,
+                    studentId: student._id.toString(),
+                    reminderId: reminder._id.toString(),
+                    url: "/student/notifications",
+                    userType: "Student",
+                  },
+                },
+              );
+            }
+          } else if (channel === "EMAIL") {
+            // Send email notification
+            if (student.email) {
+              result = await NotificationService.sendMultiChannelNotification({
+                studentId: student._id,
+                studentName: student.name,
+                email: student.email,
+                title: reminder.title,
+                message: reminder.message,
+                type: reminder.type,
+                metadata: {
+                  phone: student.phone,
+                  fcmToken: student.fcmToken,
+                  webPushSubscription: student.webPushSubscription,
+                  reminderId: reminder._id,
+                },
+              });
+            }
+          } else if (channel === "PUSH") {
+            // Send push notification
+            if (student.fcmToken) {
+              result = await NotificationService.sendFCMPush(
+                student.fcmToken,
+                {
+                  title: reminder.title,
+                  body: reminder.message,
+                },
+                {
+                  type: reminder.type,
+                  reminderId: reminder._id.toString(),
+                  studentId: student._id.toString(),
+                },
+              );
+            }
+          }
+
+          // Log successful send
+          reminder.notificationHistory.push({
+            sentAt: new Date(),
+            channel,
+            status: "SENT",
+            studentId: student._id,
           });
-        } else if (channel === "EMAIL") {
-          // Send email notification
-          await NotificationService.sendEmailNotification(reminder.adminId, {
-            subject: reminder.title,
-            body: reminder.message,
+        } catch (error) {
+          console.error(
+            `Failed to send ${channel} reminder to student ${student._id}:`,
+            error,
+          );
+          reminder.notificationHistory.push({
+            sentAt: new Date(),
+            channel,
+            status: "FAILED",
+            errorMessage: error.message,
+            studentId: student._id,
           });
         }
-        // Add SMS and PUSH support as needed
+      }
+    }
 
-        // Log successful send
-        reminder.notificationHistory.push({
-          sentAt: new Date(),
-          channel,
-          status: "SENT",
-        });
+    // Also send notification to admin (system-generated only)
+    if (notifyAdmin) {
+      try {
+        await NotificationService.sendAdminNotification(
+          reminder.adminId,
+          reminder.title,
+          reminder.message,
+          reminder.type,
+        );
       } catch (error) {
-        reminder.notificationHistory.push({
-          sentAt: new Date(),
-          channel,
-          status: "FAILED",
-          errorMessage: error.message,
-        });
+        console.error("Failed to send admin notification:", error);
       }
     }
 

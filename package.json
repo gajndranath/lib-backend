@@ -1,19 +1,42 @@
 {
   "name": "library-management-system-backend",
   "version": "1.0.0",
-  "description": "Production ready library management backend",
+  "description": "Production ready library management backend with security hardening",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start:cluster": "node src/cluster.js",
+    "start:cluster:2": "CLUSTER_WORKERS=2 node src/cluster.js",
+    "start:cluster:4": "CLUSTER_WORKERS=4 node src/cluster.js",
+    "start:free-tier": "cross-env NODE_OPTIONS=--max-old-space-size=128 CLUSTER_WORKERS=4 node src/cluster.js",
+    "start:paid-tier": "cross-env NODE_OPTIONS=--max-old-space-size=256 CLUSTER_WORKERS=4 node src/cluster.js",
+    "dev": "cross-env NODE_ENV=development nodemon src/index.js",
+    "dev:cluster": "cross-env NODE_ENV=development nodemon src/cluster.js",
+    "prod": "cross-env NODE_ENV=production node src/index.js",
+    "prod:cluster": "cross-env NODE_ENV=production node src/cluster.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix",
+    "load-test": "artillery run load-test.yml",
+    "load-test:advanced": "node load-test-advanced.js",
+    "load-test:quick": "artillery quick --count 50 --num 100 http://localhost:8000/api/v1/health",
+    "load-test:report": "artillery run load-test.yml --output report-$(date +%Y%m%d_%H%M%S).json"
   },
-  "keywords": [],
+  "keywords": [
+    "library",
+    "management",
+    "secure",
+    "production"
+  ],
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -31,9 +54,11 @@
     "socket.io": "^4.8.3",
     "web-push": "^3.6.7",
     "winston": "^3.19.0",
+    "xss": "^1.0.14",
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "nodemon": "^3.1.11"
   }
 }

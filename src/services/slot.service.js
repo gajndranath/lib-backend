@@ -1,6 +1,7 @@
 import { Slot } from "../models/slot.model.js";
 import { Student } from "../models/student.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
+import { SlotChangeHistory } from "../models/slotChangeHistory.model.js";
 import { ApiError } from "../utils/ApiError.js";
 
 class SlotService {
@@ -79,7 +80,7 @@ class SlotService {
       if (occupiedSeats > updateData.totalSeats) {
         throw new ApiError(
           400,
-          `Cannot reduce seats below ${occupiedSeats} occupied seats`
+          `Cannot reduce seats below ${occupiedSeats} occupied seats`,
         );
       }
     }
@@ -124,7 +125,7 @@ class SlotService {
         occupiedSeats: activeStudents.length,
         availableSeats: slot.totalSeats - activeStudents.length,
         occupancyPercentage: Math.round(
-          (activeStudents.length / slot.totalSeats) * 100
+          (activeStudents.length / slot.totalSeats) * 100,
         ),
       },
       students: activeStudents,
@@ -149,21 +150,22 @@ class SlotService {
           occupiedSeats,
           availableSeats: slot.totalSeats - occupiedSeats,
           occupancyPercentage: Math.round(
-            (occupiedSeats / slot.totalSeats) * 100
+            (occupiedSeats / slot.totalSeats) * 100,
           ),
         };
-      })
+      }),
     );
 
     return slotsWithOccupancy;
   }
 
   /**
-   * Change student's slot
+   * Change student's slot (Admin initiated)
    */
-  static async changeStudentSlot(studentId, newSlotId, adminId) {
-    const student = await Student.findById(studentId);
+  static async changeStudentSlot(studentId, newSlotId, adminId, reason = "") {
+    const student = await Student.findById(studentId).populate("slotId");
     const newSlot = await Slot.findById(newSlotId);
+    const oldSlot = student.slotId;
 
     if (!student) {
       throw new ApiError(404, "Student not found");
@@ -173,11 +175,10 @@ class SlotService {
       throw new ApiError(404, "New slot not found");
     }
 
-    // Store old values
-    const oldValues = {
-      slotId: student.slotId,
-      slotName: (await Slot.findById(student.slotId))?.name,
-    };
+    // Check if student is trying to move to same slot
+    if (oldSlot._id.toString() === newSlotId) {
+      throw new ApiError(400, "Student is already in this slot");
+    }
 
     // Check if new slot has available seats
     const occupiedSeats = await Student.countDocuments({
@@ -188,6 +189,12 @@ class SlotService {
     if (occupiedSeats >= newSlot.totalSeats) {
       throw new ApiError(400, `Slot "${newSlot.name}" is full`);
     }
+
+    // Store old values
+    const oldValues = {
+      slotId: oldSlot._id,
+      slotName: oldSlot.name,
+    };
 
     // Update student
     student.slotId = newSlotId;
@@ -207,6 +214,25 @@ class SlotService {
       metadata: { studentId: student._id },
     });
 
+    // Create slot change history record
+    await SlotChangeHistory.create({
+      studentId: student._id,
+      previousSlotId: oldSlot._id,
+      previousSlotName: oldSlot.name,
+      newSlotId: newSlot._id,
+      newSlotName: newSlot.name,
+      changeType: "ADMIN_INITIATED",
+      changedBy: adminId,
+      changedByRole: "ADMIN",
+      reason,
+      metadata: {
+        previousTimeRange: oldSlot.timeRange,
+        newTimeRange: newSlot.timeRange,
+        previousMonthlyFee: student.monthlyFee,
+        newMonthlyFee: newSlot.monthlyFee,
+      },
+    });
+
     return {
       student,
       oldSlot: oldValues,
@@ -214,6 +240,221 @@ class SlotService {
         id: newSlot._id,
         name: newSlot.name,
       },
+    };
+  }
+
+  /**
+   * Request slot change by student
+   */
+  static async requestSlotChange(studentId, newSlotId, reason = "") {
+    const student = await Student.findById(studentId).populate("slotId");
+    const newSlot = await Slot.findById(newSlotId);
+    const oldSlot = student.slotId;
+
+    if (!student) {
+      throw new ApiError(404, "Student not found");
+    }
+
+    if (!newSlot) {
+      throw new ApiError(404, "New slot not found");
+    }
+
+    // Check if student is trying to move to same slot
+    if (oldSlot._id.toString() === newSlotId) {
+      throw new ApiError(400, "Student is already in this slot");
+    }
+
+    // Check if new slot has available seats
+    const occupiedSeats = await Student.countDocuments({
+      slotId: newSlotId,
+      status: "ACTIVE",
+    });
+
+    if (occupiedSeats >= newSlot.totalSeats) {
+      throw new ApiError(400, `Slot "${newSlot.name}" is full`);
+    }
+
+    // Create slot change history record (stored as pending request)
+    const changeRequest = await SlotChangeHistory.create({
+      studentId: student._id,
+      previousSlotId: oldSlot._id,
+      previousSlotName: oldSlot.name,
+      newSlotId: newSlot._id,
+      newSlotName: newSlot.name,
+      changeType: "STUDENT_REQUESTED",
+      changedBy: studentId,
+      changedByRole: "STUDENT",
+      reason,
+      isActive: false, // Mark as pending (not yet applied)
+      metadata: {
+        previousTimeRange: oldSlot.timeRange,
+        newTimeRange: newSlot.timeRange,
+        previousMonthlyFee: student.monthlyFee,
+        newMonthlyFee: newSlot.monthlyFee,
+      },
+    });
+
+    return {
+      message: "Slot change request submitted",
+      request: changeRequest,
+      currentSlot: {
+        id: oldSlot._id,
+        name: oldSlot.name,
+      },
+      requestedSlot: {
+        id: newSlot._id,
+        name: newSlot.name,
+      },
+    };
+  }
+
+  /**
+   * Get student's slot change history
+   */
+  static async getStudentSlotHistory(studentId) {
+    const student = await Student.findById(studentId);
+
+    if (!student) {
+      throw new ApiError(404, "Student not found");
+    }
+
+    const history = await SlotChangeHistory.find({ studentId })
+      .populate("previousSlotId", "name timeRange monthlyFee")
+      .populate("newSlotId", "name timeRange monthlyFee")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return history;
+  }
+
+  /**
+   * Get all pending slot change requests (for admin)
+   */
+  static async getPendingSlotRequests() {
+    const requests = await SlotChangeHistory.find({
+      changeType: "STUDENT_REQUESTED",
+      isActive: false,
+    })
+      .populate("studentId", "name phone email")
+      .populate("previousSlotId", "name timeRange monthlyFee")
+      .populate("newSlotId", "name timeRange monthlyFee")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    return requests;
+  }
+
+  /**
+   * Approve slot change request (admin action)
+   */
+  static async approveSlotChangeRequest(historyId, adminId) {
+    const changeRecord = await SlotChangeHistory.findById(historyId);
+
+    if (!changeRecord) {
+      throw new ApiError(404, "Slot change request not found");
+    }
+
+    if (changeRecord.changeType !== "STUDENT_REQUESTED") {
+      throw new ApiError(400, "This is not a student request");
+    }
+
+    if (changeRecord.isActive) {
+      throw new ApiError(400, "This request has already been approved");
+    }
+
+    // Get student and new slot details
+    const student = await Student.findById(changeRecord.studentId);
+    const newSlot = await Slot.findById(changeRecord.newSlotId);
+
+    if (!student) {
+      throw new ApiError(404, "Student not found");
+    }
+
+    if (!newSlot) {
+      throw new ApiError(404, "New slot not found");
+    }
+
+    // Verify slot still has available seats
+    const occupiedSeats = await Student.countDocuments({
+      slotId: changeRecord.newSlotId,
+      status: "ACTIVE",
+    });
+
+    if (occupiedSeats >= newSlot.totalSeats) {
+      throw new ApiError(400, `Slot "${newSlot.name}" is now full`);
+    }
+
+    // Update student's slot
+    student.slotId = changeRecord.newSlotId;
+    await student.save();
+
+    // Update change record to active and mark as approved
+    changeRecord.isActive = true;
+    changeRecord.changeType = "STUDENT_APPROVED";
+    await changeRecord.save();
+
+    // Log the admin action
+    await AdminActionLog.create({
+      adminId,
+      action: "APPROVE_SLOT_CHANGE",
+      targetEntity: "STUDENT",
+      targetId: student._id,
+      newValue: {
+        slotId: changeRecord.newSlotId,
+        slotName: changeRecord.newSlotName,
+      },
+      metadata: { studentId: student._id, changeRequestId: historyId },
+    });
+
+    return {
+      message: "Slot change request approved",
+      student,
+      oldSlot: {
+        id: changeRecord.previousSlotId,
+        name: changeRecord.previousSlotName,
+      },
+      newSlot: {
+        id: changeRecord.newSlotId,
+        name: changeRecord.newSlotName,
+      },
+    };
+  }
+
+  /**
+   * Reject slot change request (admin action)
+   */
+  static async rejectSlotChangeRequest(historyId, adminId, reason = "") {
+    const changeRecord = await SlotChangeHistory.findById(historyId);
+
+    if (!changeRecord) {
+      throw new ApiError(404, "Slot change request not found");
+    }
+
+    if (changeRecord.changeType !== "STUDENT_REQUESTED") {
+      throw new ApiError(400, "This is not a student request");
+    }
+
+    if (changeRecord.isActive) {
+      throw new ApiError(400, "This request has already been approved");
+    }
+
+    // Delete the change record (mark as rejected)
+    await SlotChangeHistory.findByIdAndDelete(historyId);
+
+    // Log the admin action
+    await AdminActionLog.create({
+      adminId,
+      action: "REJECT_SLOT_CHANGE",
+      targetEntity: "STUDENT",
+      targetId: changeRecord.studentId,
+      newValue: {
+        reason,
+      },
+      metadata: { changeRequestId: historyId },
+    });
+
+    return {
+      message: "Slot change request rejected",
     };
   }
 

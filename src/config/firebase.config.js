@@ -7,12 +7,14 @@ export const initializeFirebase = () => {
   try {
     if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY) {
       console.warn(
-        "⚠️ Firebase credentials not found. Push notifications will be disabled."
+        "⚠️ Firebase credentials not found. Push notifications will be disabled.",
       );
       return null;
     }
 
+    // ✅ RULE 7: Reuse singleton app (don't create per-request)
     if (firebaseApp) {
+      console.log("✅ Firebase app already initialized (reusing)");
       return firebaseApp;
     }
 
@@ -32,7 +34,21 @@ export const initializeFirebase = () => {
       credential: admin.credential.cert(serviceAccount),
     });
 
-    console.log("✅ Firebase initialized successfully");
+    console.log("✅ Firebase initialized (singleton)");
+
+    // ✅ RULE 7: Cleanup on shutdown
+    process.on("SIGTERM", async () => {
+      try {
+        if (firebaseApp) {
+          await firebaseApp.delete();
+          console.log("✅ Firebase app deleted on shutdown");
+          firebaseApp = null;
+        }
+      } catch (err) {
+        console.error("❌ Firebase shutdown error:", err);
+      }
+    });
+
     return firebaseApp;
   } catch (error) {
     console.error("❌ Firebase initialization failed:", error.message);

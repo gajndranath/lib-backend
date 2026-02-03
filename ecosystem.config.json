@@ -1,0 +1,46 @@
+{
+  "apps": [
+    {
+      "name": "library-api",
+      "script": "./src/index.js",
+      "version": "1.0.0",
+      "description": "Library Management API - Production",
+      "watch": false,
+      "ignore_watch": ["node_modules", "logs", "public"],
+      "instances": "max",
+      "exec_mode": "cluster",
+      "env": {
+        "NODE_ENV": "production",
+        "PORT": 8000
+      },
+      "log_file": "./logs/combined.log",
+      "out_file": "./logs/out.log",
+      "error_file": "./logs/error.log",
+      "merge_logs": true,
+      "autorestart": true,
+      "max_memory_restart": "1500M",
+      "max_restarts": 10,
+      "min_uptime": "10s",
+      "listen_timeout": 10000,
+      "kill_timeout": 5000,
+      "shutdown_with_message": true,
+      "exp_backoff_restart_delay": 100,
+      "env_production": {
+        "NODE_ENV": "production"
+      }
+    }
+  ],
+  "deploy": {
+    "production": {
+      "user": "node",
+      "host": "your-server-ip",
+      "ref": "origin/main",
+      "repo": "https://github.com/your-repo.git",
+      "path": "/var/www/library-api",
+      "post-deploy": "npm install --only=production && npm start",
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

@@ -10,34 +10,38 @@ import {
   markAllAsRead,
   getNotificationPreferences,
   updateNotificationPreferences,
+  sendDirectNotification,
 } from "../controllers/notification.controller.js";
+import {
+  notificationLimiter,
+  apiLimiter,
+} from "../middlewares/rateLimiter.middleware.js";
 
 const router = Router();
 
-// All routes require authentication
+// Apply authentication to all routes
 router.use(verifyJWT);
 
-// Push subscription management
-router.route("/subscribe").post(savePushSubscription);
-router.route("/unsubscribe").post(removePushSubscription);
+// High-frequency notification operations - use notification limiter
+router.route("/history").get(notificationLimiter, getNotificationHistory);
+router.route("/read/:notificationId").patch(notificationLimiter, markAsRead);
+router.route("/read-all").patch(notificationLimiter, markAllAsRead);
 
-// VAPID key for web push
-router.route("/vapid-key").get(getVapidKey);
-
-// Notification preferences
+// Standard rate limiting for preference management
 router
   .route("/preferences")
-  .get(getNotificationPreferences)
-  .put(updateNotificationPreferences);
+  .get(apiLimiter, getNotificationPreferences)
+  .put(apiLimiter, updateNotificationPreferences);
 
-// Notification history
-router.route("/history").get(getNotificationHistory);
+// Push subscription management - standard rate limit
+router.route("/subscribe").post(apiLimiter, savePushSubscription);
+router.route("/unsubscribe").post(apiLimiter, removePushSubscription);
 
-// Mark notifications
-router.route("/read/:notificationId").patch(markAsRead);
-router.route("/read-all").patch(markAllAsRead);
+// VAPID key for web push - cached, safe to have high limit
+router.route("/vapid-key").get(getVapidKey);
 
-// Test notifications
-router.route("/test").post(testNotificationChannels);
+// Admin operations - standard rate limit
+router.route("/test").post(apiLimiter, testNotificationChannels);
+router.route("/send-to-student").post(apiLimiter, sendDirectNotification);
 
 export default router;

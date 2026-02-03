@@ -87,6 +87,16 @@ const studentSchema = new Schema(
       default: Date.now,
       required: true,
     },
+    billingDay: {
+      type: Number,
+      min: 1,
+      max: 31,
+      required: true,
+    },
+    nextBillingDate: {
+      type: Date,
+      required: true,
+    },
     leavingDate: {
       type: Date,
     },
@@ -110,6 +120,10 @@ const studentSchema = new Schema(
     },
     fcmToken: {
       type: String,
+    },
+    publicKey: {
+      type: String,
+      trim: true,
     },
 
     // Metadata
@@ -158,6 +172,34 @@ studentSchema.methods.archive = function (reason) {
 studentSchema.pre("save", async function () {
   if (!this.isModified("password")) return;
   this.password = await bcrypt.hash(this.password, 10);
+});
+
+// Set billing day and next billing date for new students
+studentSchema.pre("save", async function () {
+  if (this.isNew && this.joiningDate) {
+    // Set billing day to the day of joining date
+    this.billingDay = this.joiningDate.getDate();
+
+    // Calculate next billing date (one month from joining)
+    const nextDate = new Date(this.joiningDate);
+    nextDate.setMonth(nextDate.getMonth() + 1);
+
+    // Handle edge case: if joining day is 31 but next month has fewer days
+    // For example, joining on Jan 31, next billing is Feb 28/29
+    const maxDayInNextMonth = new Date(
+      nextDate.getFullYear(),
+      nextDate.getMonth() + 1,
+      0,
+    ).getDate();
+
+    if (this.billingDay > maxDayInNextMonth) {
+      nextDate.setDate(maxDayInNextMonth);
+    } else {
+      nextDate.setDate(this.billingDay);
+    }
+
+    this.nextBillingDate = nextDate;
+  }
 });
 
 // Password verification method
@@ -210,5 +252,19 @@ studentSchema.pre("save", async function () {
     }
   }
 });
+
+// Performance Indexes for common queries
+// Composite index for slot capacity checks
+studentSchema.index({ slotId: 1, status: 1, isDeleted: 1 });
+
+// Index for student lookup by status
+studentSchema.index({ status: 1, isDeleted: 1 });
+
+// Index for deleted students queries
+studentSchema.index({ isDeleted: 1, deletedAt: 1 });
+
+// Index for date range queries
+studentSchema.index({ joiningDate: 1 });
+studentSchema.index({ createdAt: 1 });
 
 export const Student = mongoose.model("Student", studentSchema);

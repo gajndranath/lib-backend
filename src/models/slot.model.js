@@ -15,6 +15,14 @@ const slotSchema = new Schema(
       type: Number,
       required: true,
       min: 0,
+      get: (value) => {
+        // Round to 2 decimal places when retrieving
+        return Math.round(value * 100) / 100;
+      },
+      set: (value) => {
+        // Round to 2 decimal places when setting
+        return Math.round(value * 100) / 100;
+      },
     },
     totalSeats: {
       type: Number,
@@ -33,7 +41,7 @@ const slotSchema = new Schema(
   {
     timestamps: true,
     toJSON: { virtuals: true },
-  }
+  },
 );
 
 // Virtual for occupied seats (calculated from active students)

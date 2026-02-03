@@ -6,10 +6,16 @@ import {
   registerAdmin,
   getAllAdmins,
   updateAdmin,
+  updateOwnProfile,
+  changePassword,
   deleteAdmin,
+  getAuditLogs,
 } from "../controllers/admin.controller.js";
 import { verifyJWT, authorizeRoles } from "../middlewares/auth.middleware.js";
-import { authLimiter } from "../middlewares/rateLimiter.middleware.js";
+import {
+  apiLimiter,
+  authLimiter,
+} from "../middlewares/rateLimiter.middleware.js";
 import AnalyticsService from "../services/analytics.service.js";
 import FeeService from "../services/fee.service.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -18,13 +24,19 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 const router = Router();
 
 // Public Routes
-// router.route("/login").post(authLimiter, loginAdmin);
-router.route("/login").post(loginAdmin);
-// Protected Routes (All authenticated admins)
+router.route("/login").post(authLimiter, loginAdmin);
+
+// Protected Routes - Apply rate limiter and auth to all protected routes
+router.use(apiLimiter);
 router.use(verifyJWT);
 
 router.route("/profile").get(getAdminProfile);
+router.route("/profile").patch(updateOwnProfile);
+router.route("/profile/change-password").post(changePassword);
 router.route("/notifications/preferences").patch(updateNotificationPreferences);
+
+// Audit Logs (SUPER_ADMIN only)
+router.route("/audit-logs").get(authorizeRoles("SUPER_ADMIN"), getAuditLogs);
 
 // NEW: Admin Management Routes (SUPER_ADMIN only)
 router.route("/register").post(authorizeRoles("SUPER_ADMIN"), registerAdmin);
