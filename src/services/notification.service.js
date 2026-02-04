@@ -393,6 +393,7 @@ class NotificationService {
 
   /**
    * Send chat notification (in-app + push)
+   * Skips notification if user is actively viewing the chat
    */
   static async sendChatNotification({
     recipientId,
@@ -407,9 +408,21 @@ class NotificationService {
       inApp: null,
       webPush: null,
       push: null,
+      skipped: false,
     };
 
     try {
+      // ✅ Check if user is actively viewing this chat
+      const redisClient = (await import("../config/redis.js")).getRedisClient();
+      const activeKey = `active_chat:${recipientType}:${recipientId}`;
+      const activeChat = await redisClient.get(activeKey).catch(() => null);
+
+      if (activeChat === conversationId.toString()) {
+        // User is actively viewing this chat, skip notification
+        results.skipped = true;
+        return results;
+      }
+
       const Model =
         recipientType === "Admin"
           ? (await import("../models/admin.model.js")).Admin

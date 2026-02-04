@@ -85,7 +85,7 @@ class ChatService {
   static async markDelivered(messageId) {
     return ChatMessage.findByIdAndUpdate(
       messageId,
-      { status: "DELIVERED" },
+      { status: "DELIVERED", deliveredAt: new Date() },
       { new: true },
     );
   }

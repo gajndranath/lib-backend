@@ -307,6 +307,29 @@ export const socketHandlers = (io) => {
         io.to(room).emit("chat:stop_typing", { from: { userId, userType } });
       });
 
+      // ========== ACTIVE CONVERSATION TRACKING (to skip notifications) ==========
+
+      socket.on("chat:set-active-conversation", async ({ conversationId }) => {
+        try {
+          if (conversationId) {
+            // Store active conversation in Redis with TTL
+            const key = `active_chat:${userType}:${userId}`;
+            await redisClient.setEx(key, 3600, conversationId).catch(() => {});
+          }
+        } catch (err) {
+          console.error("❌ chat:set-active-conversation:", err);
+        }
+      });
+
+      socket.on("chat:clear-active-conversation", async () => {
+        try {
+          const key = `active_chat:${userType}:${userId}`;
+          await redisClient.del(key).catch(() => {});
+        } catch (err) {
+          console.error("❌ chat:clear-active-conversation:", err);
+        }
+      });
+
       // ========== WEBRTC CALLS (all validated & cleaned) ==========
 
       socket.on("call:offer", async (payload) => {

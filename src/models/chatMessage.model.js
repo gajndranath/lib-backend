@@ -67,8 +67,48 @@ const chatMessageSchema = new Schema(
       enum: ["SENT", "DELIVERED", "READ"],
       default: "SENT",
     },
+    deliveredAt: {
+      type: Date,
+    },
     readAt: {
       type: Date,
+    },
+    // Message features (for future use)
+    replyTo: {
+      messageId: {
+        type: Schema.Types.ObjectId,
+        ref: "ChatMessage",
+      },
+      senderName: String,
+      decryptedText: String,
+    },
+    editedAt: Date,
+    editHistory: [
+      {
+        editedAt: Date,
+        encryptedForRecipient: encryptedPayloadSchema,
+        encryptedForSender: encryptedPayloadSchema,
+      },
+    ],
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    forwardedFrom: {
+      messageId: {
+        type: Schema.Types.ObjectId,
+        ref: "ChatMessage",
+      },
+      senderName: String,
+    },
+    // For offline queue support
+    isQueued: {
+      type: Boolean,
+      default: false,
+    },
+    retryCount: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true },
