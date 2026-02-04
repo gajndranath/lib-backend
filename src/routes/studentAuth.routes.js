@@ -4,6 +4,7 @@ import {
   requestEmailOtp,
   verifyEmailOtp,
   loginStudent,
+  logoutStudent,
   requestPasswordReset,
   resetPassword,
   getStudentProfile,
@@ -37,6 +38,7 @@ router.route("/register").post(authLimiter, registerStudent);
 router.route("/request-otp").post(otpLimiter, requestEmailOtp);
 router.route("/verify-otp").post(otpLimiter, verifyEmailOtp);
 router.route("/login").post(authLimiter, loginStudent);
+router.route("/logout").post(verifyStudentJWT, logoutStudent);
 router.route("/forgot-password/request").post(otpLimiter, requestPasswordReset);
 router.route("/forgot-password/reset").post(otpLimiter, resetPassword);
 

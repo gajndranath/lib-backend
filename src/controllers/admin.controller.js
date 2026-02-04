@@ -275,6 +275,20 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, null, "Admin deleted successfully"));
 });
 
+// NEW FUNCTION: Logout Admin
+const logoutAdmin = asyncHandler(async (req, res) => {
+  const options = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
+
+  return res
+    .status(200)
+    .clearCookie("accessToken", options)
+    .json(new ApiResponse(200, null, "Logged out successfully"));
+});
+
 // NEW FUNCTION: Get audit logs
 const getAuditLogs = asyncHandler(async (req, res) => {
   const { search = "", action = "all", page = "1", limit = "20" } = req.query;
@@ -342,6 +356,7 @@ const getAuditLogs = asyncHandler(async (req, res) => {
 // Export ALL functions
 export {
   loginAdmin,
+  logoutAdmin,
   getAdminProfile,
   updateNotificationPreferences,
   registerAdmin,

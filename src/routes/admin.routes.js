@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   loginAdmin,
+  logoutAdmin,
   getAdminProfile,
   updateNotificationPreferences,
   registerAdmin,
@@ -30,6 +31,7 @@ router.route("/login").post(authLimiter, loginAdmin);
 router.use(apiLimiter);
 router.use(verifyJWT);
 
+router.route("/logout").post(logoutAdmin);
 router.route("/profile").get(getAdminProfile);
 router.route("/profile").patch(updateOwnProfile);
 router.route("/profile/change-password").post(changePassword);
