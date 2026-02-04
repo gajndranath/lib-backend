@@ -5,12 +5,14 @@ import ChatService from "../services/chat.service.js";
 import { ChatMessage } from "../models/chatMessage.model.js";
 import { Admin } from "../models/admin.model.js";
 import { Student } from "../models/student.model.js";
+import cacheService from "../utils/cache.js";
 
 export const setAdminPublicKey = asyncHandler(async (req, res) => {
   const { publicKey } = req.body;
   if (!publicKey) throw new ApiError(400, "publicKey is required");
 
   await Admin.findByIdAndUpdate(req.admin._id, { publicKey });
+  await cacheService.del(`chat:admin:pk:${req.admin._id}`);
   return res.status(200).json(new ApiResponse(200, null, "Public key updated"));
 });
 
@@ -32,6 +34,8 @@ export const setAdminKeyBackup = asyncHandler(async (req, res) => {
     keyBackupVersion: version,
     keyBackupUpdatedAt: new Date(),
   });
+
+  await cacheService.del(`chat:admin:pk:${req.admin._id}`);
 
   return res.status(200).json(new ApiResponse(200, null, "Key backup updated"));
 });
