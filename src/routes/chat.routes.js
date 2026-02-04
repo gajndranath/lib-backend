@@ -14,6 +14,9 @@ import {
   listConversations,
   listMessages,
   sendMessage,
+  editMessage,
+  deleteMessage,
+  forwardMessage,
 } from "../controllers/chat.controller.js";
 
 const router = Router();
@@ -44,5 +47,12 @@ router
 
 // Message sending - high rate limit (chat specific)
 router.route("/messages").post(chatLimiter, sendMessage);
+
+// ✅ Message edit, delete, forward - chat rate limit
+router
+  .route("/messages/:messageId")
+  .put(chatLimiter, editMessage)
+  .delete(chatLimiter, deleteMessage);
+router.route("/messages/:messageId/forward").post(chatLimiter, forwardMessage);
 
 export default router;

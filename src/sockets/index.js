@@ -350,6 +350,13 @@ export const socketHandlers = (io) => {
             startedAt: new Date(),
           });
 
+          console.log(`📞 Call initiated: ${callSession._id}`);
+          console.log(`   From: ${userType} ${userId}`);
+          console.log(`   To: ${recipientType} ${recipientId}`);
+          console.log(
+            `   Room target: ${recipientType.toLowerCase()}_${recipientId}`,
+          );
+
           // ✅ RULE 9: Store SDP in Redis with TTL (30s)
           await redisClient
             .setEx(
@@ -360,12 +367,14 @@ export const socketHandlers = (io) => {
             .catch(() => {});
 
           const room = `${recipientType.toLowerCase()}_${recipientId}`;
+          console.log(`✅ Broadcasting call:offer to room: ${room}`);
           io.to(room).emit("call:offer", {
             callId: callSession._id,
             from: { userId, userType },
             sdp,
             conversationId,
           });
+          console.log(`✅ call:offer sent with callId: ${callSession._id}`);
 
           // ✅ RULE 5: Auto-end unanswered calls after 60s
           const timeoutId = setTimeout(async () => {

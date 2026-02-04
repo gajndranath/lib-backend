@@ -8,6 +8,7 @@ class AnnouncementService {
     targetScope,
     slotId,
     recipientIds,
+    recipientCiphertexts,
     title,
     body,
   }) {
@@ -20,6 +21,7 @@ class AnnouncementService {
       targetScope,
       slotId: slotId || undefined,
       recipientIds: recipientIds || [],
+      recipientCiphertexts: recipientCiphertexts || [],
       title,
       body,
     });

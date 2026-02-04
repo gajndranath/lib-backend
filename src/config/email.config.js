@@ -2,12 +2,95 @@ import nodemailer from "nodemailer";
 import { ApiError } from "../utils/ApiError.js";
 
 let transporter = null;
+let emailAvailable = false;
 
-export const initializeEmail = () => {
+// ✅ Retry logic for email initialization
+const retryEmailInit = async (maxRetries = 3, delay = 2000) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Email init attempt ${attempt}/${maxRetries}...`);
+
+      transporter = nodemailer.createTransport({
+        host: process.env.EMAIL_HOST,
+        port: parseInt(process.env.EMAIL_PORT || "587"),
+        secure: process.env.EMAIL_PORT === "465",
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASSWORD,
+        },
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 15000,
+        pool: {
+          maxConnections: 5,
+          maxMessages: 50,
+          rateDelta: 2000,
+          rateLimit: 10,
+        },
+        tls: {
+          rejectUnauthorized: false,
+        },
+        maxConnections: 1,
+        maxMessages: 100,
+      });
+
+      // ✅ Verify with timeout
+      const verified = await new Promise((resolve) => {
+        const verifyTimeout = setTimeout(() => {
+          console.warn(
+            `⚠️  Email verification timeout (attempt ${attempt}/${maxRetries})`,
+          );
+          resolve(false);
+        }, 8000);
+
+        transporter.verify((error) => {
+          clearTimeout(verifyTimeout);
+
+          if (error) {
+            console.error(
+              `❌ Email verification failed (attempt ${attempt}/${maxRetries}):`,
+              error.code || error.message,
+            );
+            resolve(false);
+          } else {
+            console.log(
+              `✅ Email server verified (attempt ${attempt}/${maxRetries})`,
+            );
+            resolve(true);
+          }
+        });
+      });
+
+      if (verified) {
+        emailAvailable = true;
+        return true;
+      }
+
+      if (attempt < maxRetries) {
+        console.log(`⏳ Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    } catch (error) {
+      console.error(
+        `❌ Email initialization error (attempt ${attempt}/${maxRetries}):`,
+        error.message,
+      );
+
+      if (attempt < maxRetries) {
+        console.log(`⏳ Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
+  return false;
+};
+
+export const initializeEmail = async () => {
   try {
     if (process.env.EMAIL_DISABLED === "true") {
       console.warn("⚠️ Email service disabled via EMAIL_DISABLED.");
-      transporter = null;
+      emailAvailable = false;
       return null;
     }
 
@@ -15,45 +98,25 @@ export const initializeEmail = () => {
       console.warn(
         "⚠️ Email configuration not found. Email notifications will be disabled.",
       );
-      transporter = null;
+      emailAvailable = false;
       return null;
     }
 
-    // ✅ RULE 8: Pooled transporter (not per-request clients)
-    transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: parseInt(process.env.EMAIL_PORT || "587"),
-      secure: process.env.EMAIL_PORT === "465",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-      // ✅ RULE 8: Connection pooling config
-      pool: {
-        maxConnections: 10, // Optimized for free tier
-        maxMessages: 100, // Max per connection
-        rateDelta: 1000, // Rate limit window
-        rateLimit: 14, // Connections per window
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    // ✅ Try to initialize with retries
+    const success = await retryEmailInit(3, 2000);
 
-    // Verify connection
-    transporter.verify((error) => {
-      if (error) {
-        console.error("❌ Email configuration error:", error);
-        transporter = null;
-      } else {
-        console.log("✅ Email server ready (pooled)");
-      }
-    });
+    if (success) {
+      emailAvailable = true;
+      console.log("📧 Email service initialized successfully");
+    } else {
+      emailAvailable = false;
+      console.warn(
+        "⚠️ Email service unavailable. Email functionality disabled (will not affect app).",
+      );
+      transporter = null;
+    }
 
-    // ✅ RULE 8: Close on shutdown
+    // ✅ Close on shutdown
     process.on("SIGTERM", () => {
       if (transporter) {
         transporter.close();
@@ -63,10 +126,15 @@ export const initializeEmail = () => {
 
     return transporter;
   } catch (error) {
-    console.error("❌ Email initialization failed:", error.message);
+    console.error("❌ Email initialization error:", error.message);
+    emailAvailable = false;
     transporter = null;
     return null;
   }
+};
+
+export const isEmailAvailable = () => {
+  return emailAvailable;
 };
 
 export const getEmailTransporter = () => {
@@ -79,12 +147,22 @@ export const getEmailTransporter = () => {
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
     if (process.env.EMAIL_DISABLED === "true") {
-      return { success: false, error: "Email service disabled" };
+      console.warn("📧 Email disabled, skipping send:", { to, subject });
+      return { success: false, error: "Email service disabled", skipped: true };
     }
 
     const mailTransporter = getEmailTransporter();
     if (!mailTransporter) {
-      return { success: false, error: "Email service not initialized" };
+      console.warn("📧 Email transporter not available, skipping send:", {
+        to,
+        subject,
+      });
+      // ✅ Don't fail the app if email is unavailable
+      return {
+        success: false,
+        error: "Email service not initialized",
+        skipped: true,
+      };
     }
 
     const mailOptions = {
@@ -135,8 +213,15 @@ export const sendEmail = async (to, subject, text, html = null) => {
     console.log(`✅ Email sent to ${to}: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error("❌ Email sending error:", error.message);
-    return { success: false, error: error.message };
+    console.error("❌ Email sending error:", error.code || error.message);
+    // ✅ Don't throw error - return gracefully
+    // Email failure should not break the app
+    return {
+      success: false,
+      error: error.message,
+      code: error.code,
+      skipped: true,
+    };
   }
 };
 

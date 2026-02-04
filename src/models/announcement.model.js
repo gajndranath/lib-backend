@@ -25,6 +25,14 @@ const announcementSchema = new Schema(
       ref: "Slot",
     },
     recipientIds: [{ type: Schema.Types.ObjectId, ref: "Student" }],
+    recipientCiphertexts: [
+      {
+        recipientId: String,
+        algorithm: String,
+        titleCiphertext: String,
+        bodyCiphertext: String,
+      },
+    ],
   },
   { timestamps: true },
 );

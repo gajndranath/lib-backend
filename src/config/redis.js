@@ -8,7 +8,6 @@ if (!process.env.REDIS_URL) {
 }
 
 let redisClient;
-let store;
 
 if (process.env.REDIS_URL) {
   redisClient = new Redis(process.env.REDIS_URL);
@@ -20,13 +19,7 @@ if (process.env.REDIS_URL) {
   redisClient.on("connect", () => {
     console.log("✅ Redis connected");
   });
-
-  store = new RedisStore({
-    sendCommand: (...args) => redisClient.call(...args),
-  });
 } else {
-  // Fallback to default memory store (built-in to express-rate-limit)
-  store = undefined; // express-rate-limit will use its default MemoryStore
   console.log("⚠️ Using in-memory store for rate limiting (not ideal)");
 }
 
@@ -66,22 +59,3 @@ export const monitorRedisMemory = async () => {
     console.error("❌ Redis memory check failed:", err);
   }
 };
-
-export const apiLimiter = rateLimit({
-  store,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per window
-  message: "Too many requests from this IP, please try again after 15 minutes",
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-export const authLimiter = rateLimit({
-  store,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 15, // 15 login attempts per 15 minutes
-  message: "Too many login attempts, please try again later",
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-});

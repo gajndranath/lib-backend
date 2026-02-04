@@ -208,3 +208,96 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   return res.status(201).json(new ApiResponse(201, message, "Message sent"));
 });
+
+// ✅ Edit message
+export const editMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { text, encryptedPayload } = req.body;
+
+  if (!text || !encryptedPayload) {
+    throw new ApiError(400, "text and encryptedPayload are required");
+  }
+
+  const message = await ChatMessage.findById(messageId);
+  if (!message) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  // Check if requester is the sender
+  if (message.senderId.toString() !== req.admin._id.toString()) {
+    throw new ApiError(403, "Not authorized to edit this message");
+  }
+
+  // Update message
+  message.text = text;
+  message.encryptedForRecipient = encryptedPayload;
+  message.editedAt = new Date();
+  if (!message.editHistory) {
+    message.editHistory = [];
+  }
+  message.editHistory.push({
+    text: message.text,
+    editedAt: new Date(),
+  });
+
+  await message.save();
+
+  return res.status(200).json(new ApiResponse(200, message, "Message edited"));
+});
+
+// ✅ Delete message
+export const deleteMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+
+  const message = await ChatMessage.findById(messageId);
+  if (!message) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  // Check if requester is the sender
+  if (message.senderId.toString() !== req.admin._id.toString()) {
+    throw new ApiError(403, "Not authorized to delete this message");
+  }
+
+  // Soft delete
+  message.isDeleted = true;
+  message.deletedAt = new Date();
+  await message.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Message deleted successfully"));
+});
+
+// ✅ Forward message
+export const forwardMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { text, encryptedPayload } = req.body;
+
+  const originalMessage = await ChatMessage.findById(messageId);
+  if (!originalMessage) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  // Create new message with forwardedFrom reference
+  const newMessage = new ChatMessage({
+    conversationId: originalMessage.conversationId,
+    senderId: req.admin._id,
+    senderType: "Admin",
+    recipientId: originalMessage.recipientId,
+    recipientType: originalMessage.recipientType,
+    text: text || originalMessage.text,
+    encryptedForRecipient:
+      encryptedPayload || originalMessage.encryptedForRecipient,
+    encryptedForSender: encryptedPayload || originalMessage.encryptedForSender,
+    forwardedFrom: messageId,
+    contentType: originalMessage.contentType || "TEXT",
+    status: "SENT",
+  });
+
+  await newMessage.save();
+
+  return res
+    .status(201)
+    .json(new ApiResponse(201, newMessage, "Message forwarded"));
+});

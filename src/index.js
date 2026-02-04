@@ -18,90 +18,95 @@ import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
 dotenv.config({ path: "./.env" });
 
 // Initialize notification services
-initializeFirebase();
-initializeEmail();
-initializeWebPush();
+(async () => {
+  initializeFirebase();
+  await initializeEmail(); // ✅ Await email initialization with retries
+  initializeWebPush();
 
-const server = http.createServer(app);
+  // Continue with server setup
+  const server = http.createServer(app);
 
-// Socket.io initialization with OPTIMIZED CONFIG
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CORS_ORIGIN?.split(",") || [
-      "https://lib-frontend-roan.vercel.app/students/new",
-    ],
-    credentials: true,
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Authorization", "Content-Type"],
-  },
-  ...socketOptimizationConfig,
-});
+  // Socket.io initialization with OPTIMIZED CONFIG
+  const io = new Server(server, {
+    cors: {
+      origin: process.env.CORS_ORIGIN?.split(",") || [
+        "https://lib-frontend-roan.vercel.app/students/new",
+      ],
+      credentials: true,
+      methods: ["GET", "POST"],
+      allowedHeaders: ["Authorization", "Content-Type"],
+    },
+    ...socketOptimizationConfig,
+  });
 
-// Initialize socket connection pool manager
-const socketPoolManager = new SocketConnectionPoolManager(io);
-global.socketPoolManager = socketPoolManager;
+  // Initialize socket connection pool manager
+  const socketPoolManager = new SocketConnectionPoolManager(io);
+  global.socketPoolManager = socketPoolManager;
 
-// Store for connected admin tokens
-const connectedAdminTokens = new Map();
+  // Store for connected admin tokens
+  const connectedAdminTokens = new Map();
 
-// Making io accessible globally and in controllers
-global.io = io;
-app.set("io", io);
-app.set("adminTokens", connectedAdminTokens);
+  // Making io accessible globally and in controllers
+  global.io = io;
+  app.set("io", io);
+  app.set("adminTokens", connectedAdminTokens);
 
-// Setup socket memory management and monitoring
-setupSocketMemoryManagement(io);
+  // Setup socket memory management and monitoring
+  setupSocketMemoryManagement(io);
 
-// Socket event handlers
-socketHandlers(io);
+  // Socket event handlers
+  socketHandlers(io);
 
-// Database connection followed by Server Start
-connectDB()
-  .then(() => {
-    // Monitor database connection pool
-    monitorConnectionPool();
+  // Database connection followed by Server Start
+  connectDB()
+    .then(() => {
+      // Monitor database connection pool
+      monitorConnectionPool();
 
-    const PORT = process.env.PORT || 8000;
+      const PORT = process.env.PORT || 8000;
 
-    server.listen(PORT, () => {
-      console.log(`🚀 Server running on port: ${PORT}`);
-      console.log(`⏰ Cron Jobs are active and monitoring payments.`);
-      console.log(
-        `📧 Email service: ${
-          process.env.EMAIL_USER ? "✅ Configured" : "❌ Not configured"
-        }`,
-      );
-      console.log(
-        `🔥 Firebase: ${
-          process.env.FIREBASE_PROJECT_ID
-            ? "✅ Configured"
-            : "❌ Not configured"
-        }`,
-      );
-      console.log(
-        `🔔 Web Push: ${
-          process.env.PUBLIC_VAPID_KEY ? "✅ Configured" : "❌ Not configured"
-        }`,
-      );
-      console.log(`🔌 Socket.IO server is listening with optimized settings`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-      console.log(`⚙️  Rate limiting: ENABLED with per-endpoint optimization`);
-      console.log(`💾 Memory management: ENABLED`);
-      console.log(`🔄 Connection pooling: ENABLED (25 max connections)`);
+      server.listen(PORT, () => {
+        console.log(`🚀 Server running on port: ${PORT}`);
+        console.log(`⏰ Cron Jobs are active and monitoring payments.`);
+        console.log(
+          `📧 Email service: ${
+            process.env.EMAIL_USER ? "✅ Configured" : "❌ Not configured"
+          }`,
+        );
+        console.log(
+          `🔥 Firebase: ${
+            process.env.FIREBASE_PROJECT_ID
+              ? "✅ Configured"
+              : "❌ Not configured"
+          }`,
+        );
+        console.log(
+          `🔔 Web Push: ${
+            process.env.PUBLIC_VAPID_KEY ? "✅ Configured" : "❌ Not configured"
+          }`,
+        );
+        console.log(`🔌 Socket.IO server is listening with optimized settings`);
+        console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+        console.log(
+          `⚙️  Rate limiting: ENABLED with per-endpoint optimization`,
+        );
+        console.log(`💾 Memory management: ENABLED`);
+        console.log(`🔄 Connection pooling: ENABLED (25 max connections)`);
+      });
+    })
+    .catch((err) => {
+      console.error("❌ MongoDB connection error: ", err);
+      process.exit(1);
     });
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB connection error: ", err);
-    process.exit(1);
-  });
 
-// Graceful shutdown
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received. Shutting down gracefully...");
-  server.close(() => {
-    console.log("Process terminated");
+  // Graceful shutdown
+  process.on("SIGTERM", () => {
+    console.log("SIGTERM received. Shutting down gracefully...");
+    server.close(() => {
+      console.log("Process terminated");
+    });
   });
-});
+})();
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);

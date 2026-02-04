@@ -5,7 +5,14 @@ import AnnouncementService from "../services/announcement.service.js";
 import NotificationService from "../services/notification.service.js";
 
 export const createAnnouncement = asyncHandler(async (req, res) => {
-  const { targetScope, slotId, recipientIds, title, body } = req.body;
+  const {
+    targetScope,
+    slotId,
+    recipientIds,
+    recipientCiphertexts,
+    title,
+    body,
+  } = req.body;
 
   if (!targetScope) throw new ApiError(400, "targetScope is required");
   if (!title) throw new ApiError(400, "title is required");
@@ -27,6 +34,7 @@ export const createAnnouncement = asyncHandler(async (req, res) => {
     targetScope,
     slotId,
     recipientIds: resolvedRecipientIds.map((r) => r._id || r),
+    recipientCiphertexts: recipientCiphertexts || [],
     title,
     body,
   });

@@ -31,8 +31,6 @@ const chatConversationSchema = new Schema(
     participantsHash: {
       type: String,
       required: true,
-      unique: true,
-      index: true,
     },
     lastMessageAt: {
       type: Date,
