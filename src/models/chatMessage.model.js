@@ -58,6 +58,10 @@ const chatMessageSchema = new Schema(
       type: encryptedPayloadSchema,
       required: true,
     },
+    senderPublicKey: {
+      type: String,
+      trim: true,
+    },
     status: {
       type: String,
       enum: ["SENT", "DELIVERED", "READ"],

@@ -55,6 +55,7 @@ class ChatService {
     recipientType,
     encryptedForRecipient,
     encryptedForSender,
+    senderPublicKey,
     contentType = "TEXT",
   }) {
     if (!encryptedForRecipient?.ciphertext || !encryptedForSender?.ciphertext) {
@@ -69,6 +70,7 @@ class ChatService {
       recipientType,
       encryptedForRecipient,
       encryptedForSender,
+      senderPublicKey,
       contentType,
     });
 

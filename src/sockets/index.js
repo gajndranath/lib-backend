@@ -219,6 +219,7 @@ export const socketHandlers = (io) => {
             recipientType,
             encryptedForRecipient,
             encryptedForSender,
+            senderPublicKey,
           } = payload || {};
           if (!conversationId || !recipientId || !recipientType) return;
 
@@ -230,6 +231,7 @@ export const socketHandlers = (io) => {
             recipientType,
             encryptedForRecipient,
             encryptedForSender,
+            senderPublicKey,
           });
 
           const room = `${recipientType.toLowerCase()}_${recipientId}`;

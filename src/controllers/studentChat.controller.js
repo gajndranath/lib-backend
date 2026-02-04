@@ -166,6 +166,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     recipientType,
     encryptedForRecipient,
     encryptedForSender,
+    senderPublicKey,
     contentType,
   } = req.body;
 
@@ -185,6 +186,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     recipientType,
     encryptedForRecipient,
     encryptedForSender,
+    senderPublicKey,
     contentType,
   });
 
