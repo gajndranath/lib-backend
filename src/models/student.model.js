@@ -125,6 +125,25 @@ const studentSchema = new Schema(
       type: String,
       trim: true,
     },
+    encryptedPrivateKey: {
+      type: String,
+      trim: true,
+    },
+    keyBackupSalt: {
+      type: String,
+      trim: true,
+    },
+    keyBackupIv: {
+      type: String,
+      trim: true,
+    },
+    keyBackupVersion: {
+      type: Number,
+      default: 1,
+    },
+    keyBackupUpdatedAt: {
+      type: Date,
+    },
 
     // Metadata
     notes: {

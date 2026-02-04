@@ -34,6 +34,60 @@ export const setStudentPublicKey = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, null, "Public key updated"));
 });
 
+export const setStudentKeyBackup = asyncHandler(async (req, res) => {
+  const { encryptedPrivateKey, salt, iv, version = 1, publicKey } = req.body;
+
+  if (!encryptedPrivateKey || !salt || !iv || !publicKey) {
+    throw new ApiError(
+      400,
+      "encryptedPrivateKey, salt, iv, publicKey are required",
+    );
+  }
+
+  await Student.findByIdAndUpdate(req.student._id, {
+    publicKey,
+    encryptedPrivateKey,
+    keyBackupSalt: salt,
+    keyBackupIv: iv,
+    keyBackupVersion: version,
+    keyBackupUpdatedAt: new Date(),
+  });
+
+  await cacheService.del(`chat:student:pk:${req.student._id}`);
+
+  return res.status(200).json(new ApiResponse(200, null, "Key backup updated"));
+});
+
+export const getStudentKeyBackup = asyncHandler(async (req, res) => {
+  const student = await Student.findById(req.student._id).select(
+    "publicKey encryptedPrivateKey keyBackupSalt keyBackupIv keyBackupVersion",
+  );
+
+  if (
+    !student?.encryptedPrivateKey ||
+    !student.keyBackupSalt ||
+    !student.keyBackupIv
+  ) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Key backup not found"));
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        publicKey: student.publicKey,
+        encryptedPrivateKey: student.encryptedPrivateKey,
+        salt: student.keyBackupSalt,
+        iv: student.keyBackupIv,
+        version: student.keyBackupVersion ?? 1,
+      },
+      "Key backup",
+    ),
+  );
+});
+
 export const getPublicKey = asyncHandler(async (req, res) => {
   const { userType, userId } = req.params;
   const cacheKey =

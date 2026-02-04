@@ -7,6 +7,8 @@ import {
 } from "../middlewares/rateLimiter.middleware.js";
 import {
   setAdminPublicKey,
+  setAdminKeyBackup,
+  getAdminKeyBackup,
   getPublicKey,
   createOrGetConversation,
   listConversations,
@@ -24,6 +26,10 @@ router.route("/keys/:userType/:userId").get(publicKeyLimiter, getPublicKey);
 
 // Public key setting - standard rate limit
 router.route("/keys").post(apiLimiter, setAdminPublicKey);
+
+// Key backup endpoints - standard rate limit
+router.route("/keys/backup").get(apiLimiter, getAdminKeyBackup);
+router.route("/keys/backup").post(apiLimiter, setAdminKeyBackup);
 
 // Conversation endpoints - standard rate limit
 router

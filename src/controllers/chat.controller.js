@@ -14,6 +14,58 @@ export const setAdminPublicKey = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, null, "Public key updated"));
 });
 
+export const setAdminKeyBackup = asyncHandler(async (req, res) => {
+  const { encryptedPrivateKey, salt, iv, version = 1, publicKey } = req.body;
+
+  if (!encryptedPrivateKey || !salt || !iv || !publicKey) {
+    throw new ApiError(
+      400,
+      "encryptedPrivateKey, salt, iv, publicKey are required",
+    );
+  }
+
+  await Admin.findByIdAndUpdate(req.admin._id, {
+    publicKey,
+    encryptedPrivateKey,
+    keyBackupSalt: salt,
+    keyBackupIv: iv,
+    keyBackupVersion: version,
+    keyBackupUpdatedAt: new Date(),
+  });
+
+  return res.status(200).json(new ApiResponse(200, null, "Key backup updated"));
+});
+
+export const getAdminKeyBackup = asyncHandler(async (req, res) => {
+  const admin = await Admin.findById(req.admin._id).select(
+    "publicKey encryptedPrivateKey keyBackupSalt keyBackupIv keyBackupVersion",
+  );
+
+  if (
+    !admin?.encryptedPrivateKey ||
+    !admin.keyBackupSalt ||
+    !admin.keyBackupIv
+  ) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Key backup not found"));
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        publicKey: admin.publicKey,
+        encryptedPrivateKey: admin.encryptedPrivateKey,
+        salt: admin.keyBackupSalt,
+        iv: admin.keyBackupIv,
+        version: admin.keyBackupVersion ?? 1,
+      },
+      "Key backup",
+    ),
+  );
+});
+
 export const getPublicKey = asyncHandler(async (req, res) => {
   const { userType, userId } = req.params;
   const cacheKey =

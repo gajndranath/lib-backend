@@ -6,6 +6,8 @@ import {
 } from "../middlewares/rateLimiter.middleware.js";
 import {
   setStudentPublicKey,
+  setStudentKeyBackup,
+  getStudentKeyBackup,
   getPublicKey,
   createOrGetConversation,
   listConversations,
@@ -30,6 +32,8 @@ router.use(verifyStudentJWT);
 
 router.route("/keys").post(setStudentPublicKey);
 router.route("/keys/:userType/:userId").get(publicKeyLimiter, getPublicKey);
+router.route("/keys/backup").get(getStudentKeyBackup);
+router.route("/keys/backup").post(setStudentKeyBackup);
 
 router
   .route("/conversations")
