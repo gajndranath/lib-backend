@@ -12,6 +12,8 @@ import {
   getPublicKey,
   setConversationPublicKey,
   getConversationPublicKey,
+  setConversationKeyPair,
+  getConversationKeyPair,
   createOrGetConversation,
   listConversations,
   listMessages,
@@ -46,6 +48,17 @@ router
 router
   .route("/conversations/:conversationId/keys/:userType/:userId")
   .get(publicKeyLimiter, getConversationPublicKey);
+
+// ========== CONVERSATION-BASED KEYPAIR ENDPOINTS (BACKUP) ==========
+// Set full keypair (public + private) for recovery after logout
+router
+  .route("/conversations/:conversationId/keypair")
+  .post(apiLimiter, setConversationKeyPair);
+
+// Get full keypair (public + private) from server
+router
+  .route("/conversations/:conversationId/keypair")
+  .get(apiLimiter, getConversationKeyPair);
 
 // Conversation endpoints - standard rate limit
 router

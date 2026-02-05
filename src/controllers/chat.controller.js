@@ -200,6 +200,75 @@ export const getConversationPublicKey = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
 });
 
+// ========== CONVERSATION-BASED KEYPAIR MANAGEMENT (BACKUP) ==========
+// Stores full keypair (public + private) for recovery after logout
+
+export const setConversationKeyPair = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const { publicKey, privateKey } = req.body;
+
+  if (!publicKey || !privateKey) {
+    throw new ApiError(400, "publicKey and privateKey are required");
+  }
+
+  const userId = req.admin._id;
+  const userType = "Admin";
+
+  // Upsert the conversation keypair
+  await ConversationKey.findOneAndUpdate(
+    { conversationId, userId, userType },
+    { publicKey, privateKey },
+    { upsert: true, new: true },
+  );
+
+  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
+  await cacheService.del(cacheKey);
+
+  console.log(
+    `🔐 Backed up conversation keypair: conv=${conversationId.slice(0, 8)}...`,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Conversation keypair backed up"));
+});
+
+export const getConversationKeyPair = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const userId = req.admin._id;
+  const userType = "Admin";
+
+  const key = await ConversationKey.findOne({
+    conversationId,
+    userId,
+    userType,
+  }).select("publicKey privateKey");
+
+  if (!key?.privateKey) {
+    console.warn(
+      `⚠️ Conversation keypair not found: conv=${conversationId.slice(0, 8)}...`,
+    );
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Conversation keypair not found"));
+  }
+
+  console.log(
+    `✅ Retrieved conversation keypair: conv=${conversationId.slice(0, 8)}...`,
+  );
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        publicKey: key.publicKey,
+        privateKey: key.privateKey,
+      },
+      "Keypair",
+    ),
+  );
+});
+
 // ========== CONVERSATION MANAGEMENT ==========
 
 export const createOrGetConversation = asyncHandler(async (req, res) => {
