@@ -7,6 +7,7 @@ import { Admin } from "../models/admin.model.js";
 import { Student } from "../models/student.model.js";
 import { FriendRequest } from "../models/friendRequest.model.js";
 import { StudentBlock } from "../models/studentBlock.model.js";
+import { ConversationKey } from "../models/conversationKey.model.js";
 import cacheService from "../utils/cache.js";
 
 const ensureNotBlocked = async (a, b) => {
@@ -125,6 +126,90 @@ export const getPublicKey = asyncHandler(async (req, res) => {
 
   return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
 });
+
+// ========== CONVERSATION-BASED PUBLIC KEY MANAGEMENT ==========
+
+export const setConversationPublicKey = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const { publicKey } = req.body;
+
+  if (!publicKey) {
+    throw new ApiError(400, "publicKey is required");
+  }
+
+  const userId = req.student._id;
+  const userType = "Student";
+
+  // Upsert the conversation key
+  await ConversationKey.findOneAndUpdate(
+    { conversationId, userId, userType },
+    { publicKey },
+    { upsert: true, new: true },
+  );
+
+  // Invalidate cache
+  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
+  await cacheService.del(cacheKey);
+
+  console.log(
+    `🔐 Set conversation public key: conv=${conversationId.slice(0, 8)}... user=${userId}`,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Conversation public key updated"));
+});
+
+export const getConversationPublicKey = asyncHandler(async (req, res) => {
+  const { conversationId, userId, userType } = req.params;
+
+  if (!conversationId || !userId || !userType) {
+    throw new ApiError(400, "conversationId, userId, userType are required");
+  }
+
+  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
+
+  // Try cache first
+  let cachedKey = await cacheService.get(cacheKey);
+  if (cachedKey) {
+    console.log(
+      `📦 Cache hit for conversation public key: conv=${conversationId.slice(0, 8)}...`,
+    );
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(200, { publicKey: cachedKey.publicKey }, "Public key"),
+      );
+  }
+
+  // Query database
+  const key = await ConversationKey.findOne({
+    conversationId,
+    userId,
+    userType,
+  });
+
+  if (!key) {
+    console.warn(
+      `⚠️ Conversation public key not found: conv=${conversationId.slice(0, 8)}... user=${userId}`,
+    );
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Conversation public key not found"));
+  }
+
+  console.log(
+    `✅ Found conversation public key from DB: conv=${conversationId.slice(0, 8)}...`,
+  );
+
+  // Cache for 30 minutes
+  const keyData = { publicKey: key.publicKey };
+  await cacheService.set(cacheKey, keyData, 30 * 60);
+
+  return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
+});
+
+// ========== CONVERSATION MANAGEMENT ==========
 
 export const createOrGetConversation = asyncHandler(async (req, res) => {
   const { recipientId, recipientType } = req.body;

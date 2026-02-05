@@ -9,6 +9,8 @@ import {
   setStudentKeyBackup,
   getStudentKeyBackup,
   getPublicKey,
+  setConversationPublicKey,
+  getConversationPublicKey,
   createOrGetConversation,
   listConversations,
   listMessages,
@@ -34,6 +36,17 @@ router.route("/keys").post(setStudentPublicKey);
 router.route("/keys/:userType/:userId").get(publicKeyLimiter, getPublicKey);
 router.route("/keys/backup").get(getStudentKeyBackup);
 router.route("/keys/backup").post(setStudentKeyBackup);
+
+// ========== CONVERSATION-BASED PUBLIC KEY ENDPOINTS ==========
+// Set public key for a specific conversation
+router
+  .route("/conversations/:conversationId/keys")
+  .post(setConversationPublicKey);
+
+// Get public key for a specific user in a specific conversation
+router
+  .route("/conversations/:conversationId/keys/:userType/:userId")
+  .get(publicKeyLimiter, getConversationPublicKey);
 
 router
   .route("/conversations")

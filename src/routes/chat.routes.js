@@ -10,6 +10,8 @@ import {
   setAdminKeyBackup,
   getAdminKeyBackup,
   getPublicKey,
+  setConversationPublicKey,
+  getConversationPublicKey,
   createOrGetConversation,
   listConversations,
   listMessages,
@@ -33,6 +35,17 @@ router.route("/keys").post(apiLimiter, setAdminPublicKey);
 // Key backup endpoints - standard rate limit
 router.route("/keys/backup").get(apiLimiter, getAdminKeyBackup);
 router.route("/keys/backup").post(apiLimiter, setAdminKeyBackup);
+
+// ========== CONVERSATION-BASED PUBLIC KEY ENDPOINTS ==========
+// Set public key for a specific conversation
+router
+  .route("/conversations/:conversationId/keys")
+  .post(apiLimiter, setConversationPublicKey);
+
+// Get public key for a specific user in a specific conversation
+router
+  .route("/conversations/:conversationId/keys/:userType/:userId")
+  .get(publicKeyLimiter, getConversationPublicKey);
 
 // Conversation endpoints - standard rate limit
 router

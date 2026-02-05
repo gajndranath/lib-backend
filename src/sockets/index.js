@@ -91,12 +91,10 @@ const clearSocketTimers = (socketId) => {
 };
 
 // ✅ RULE 6: Validate payload size
-const validatePayload = (payload) => {
+const validatePayload = (payload, maxSize = MAX_PAYLOAD_SIZE) => {
   const size = JSON.stringify(payload).length;
-  if (size > MAX_PAYLOAD_SIZE) {
-    console.warn(
-      `⚠️ Payload ${size} bytes exceeds max ${MAX_PAYLOAD_SIZE} bytes`,
-    );
+  if (size > maxSize) {
+    console.warn(`⚠️ Payload ${size} bytes exceeds max ${maxSize} bytes`);
     return false;
   }
   return true;
@@ -334,12 +332,31 @@ export const socketHandlers = (io) => {
 
       socket.on("call:offer", async (payload) => {
         try {
-          if (!validatePayload(payload)) {
-            socket.emit("error", { msg: "Payload too large" });
+          // WebRTC SDP can be large, allow bigger payloads here
+          if (!validatePayload(payload, 120 * 1024)) {
+            socket.emit("call:error", { msg: "Call offer too large" });
             return;
           }
 
           const { recipientId, recipientType, sdp, conversationId } = payload;
+
+          // ✅ Validate conversationId is present
+          if (!conversationId) {
+            console.error("❌ call:offer: Missing conversationId");
+            socket.emit("call:error", {
+              msg: "Conversation ID is required for calls",
+            });
+            return;
+          }
+
+          if (!recipientId || !recipientType || !sdp) {
+            console.error("❌ call:offer: Missing required fields");
+            socket.emit("call:error", {
+              msg: "Missing required call parameters",
+            });
+            return;
+          }
+
           const callSession = await CallSession.create({
             conversationId,
             participants: [
@@ -376,6 +393,14 @@ export const socketHandlers = (io) => {
           });
           console.log(`✅ call:offer sent with callId: ${callSession._id}`);
 
+          // Ack to caller with callId (needed for ICE candidates)
+          socket.emit("call:offer:ack", {
+            callId: callSession._id,
+            recipientId,
+            recipientType,
+            conversationId,
+          });
+
           // ✅ RULE 5: Auto-end unanswered calls after 60s
           const timeoutId = setTimeout(async () => {
             try {
@@ -410,7 +435,11 @@ export const socketHandlers = (io) => {
 
       socket.on("call:answer", async (payload) => {
         try {
-          if (!validatePayload(payload)) return;
+          // WebRTC SDP can be large, allow bigger payloads here
+          if (!validatePayload(payload, 120 * 1024)) {
+            socket.emit("call:error", { msg: "Call answer too large" });
+            return;
+          }
           const { callId, recipientId, recipientType, sdp } = payload;
           if (!callId) return;
 
