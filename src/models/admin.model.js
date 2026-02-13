@@ -39,6 +39,13 @@ const adminSchema = new Schema(
       type: String,
       trim: true,
     },
+    previousPublicKey: {
+      type: String,
+      trim: true,
+    },
+    publicKeyRotatedAt: {
+      type: Date,
+    },
     encryptedPrivateKey: {
       type: String,
       trim: true,

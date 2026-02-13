@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { encryptText } from "../utils/crypto.js";
 
 const encryptedPayloadSchema = new Schema(
   {
@@ -10,6 +11,15 @@ const encryptedPayloadSchema = new Schema(
     ciphertext: {
       type: String,
       required: true,
+    },
+    atRest: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      iv: String,
+      tag: String,
+      alg: String,
     },
   },
   { _id: false },
@@ -60,6 +70,7 @@ const chatMessageSchema = new Schema(
     },
     senderPublicKey: {
       type: String,
+      required: true,
       trim: true,
     },
     status: {
@@ -113,6 +124,58 @@ const chatMessageSchema = new Schema(
   },
   { timestamps: true },
 );
+
+const wrapPayloadAtRest = (payload, secret) => {
+  if (!payload?.ciphertext || !secret) return payload;
+  if (payload.atRest?.enabled) return payload;
+
+  const encrypted = encryptText(payload.ciphertext, secret);
+
+  return {
+    ...payload,
+    ciphertext: encrypted.content,
+    atRest: {
+      enabled: true,
+      iv: encrypted.iv,
+      tag: encrypted.tag,
+      alg: encrypted.alg,
+    },
+  };
+};
+
+chatMessageSchema.pre("save", function (next) {
+  const secret =
+    process.env.MESSAGE_AT_REST_SECRET || process.env.ACCESS_TOKEN_SECRET;
+
+  if (!secret) return next();
+
+  if (this.encryptedForRecipient) {
+    this.encryptedForRecipient = wrapPayloadAtRest(
+      this.encryptedForRecipient,
+      secret,
+    );
+  }
+
+  if (this.encryptedForSender) {
+    this.encryptedForSender = wrapPayloadAtRest(
+      this.encryptedForSender,
+      secret,
+    );
+  }
+
+  if (Array.isArray(this.editHistory) && this.editHistory.length > 0) {
+    this.editHistory = this.editHistory.map((entry) => ({
+      ...entry,
+      encryptedForRecipient: wrapPayloadAtRest(
+        entry.encryptedForRecipient,
+        secret,
+      ),
+      encryptedForSender: wrapPayloadAtRest(entry.encryptedForSender, secret),
+    }));
+  }
+
+  next();
+});
 
 chatMessageSchema.index({ conversationId: 1, createdAt: -1 });
 chatMessageSchema.index({ recipientId: 1, status: 1 });

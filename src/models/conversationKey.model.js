@@ -6,7 +6,6 @@ const conversationKeySchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "ChatConversation",
       required: true,
-      index: true,
     },
     userId: {
       type: Schema.Types.ObjectId,

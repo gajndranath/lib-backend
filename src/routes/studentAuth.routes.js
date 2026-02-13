@@ -2,7 +2,7 @@ import { Router } from "express";
 import {
   registerStudent,
   requestEmailOtp,
-  verifyEmailOtp,
+  verifyOtpAndAuthenticate,
   loginStudent,
   logoutStudent,
   requestPasswordReset,
@@ -36,7 +36,7 @@ const router = Router();
 // Public student auth routes - with rate limiting
 router.route("/register").post(authLimiter, registerStudent);
 router.route("/request-otp").post(otpLimiter, requestEmailOtp);
-router.route("/verify-otp").post(otpLimiter, verifyEmailOtp);
+router.route("/verify-otp").post(otpLimiter, verifyOtpAndAuthenticate);
 router.route("/login").post(authLimiter, loginStudent);
 router.route("/logout").post(verifyStudentJWT, logoutStudent);
 router.route("/forgot-password/request").post(otpLimiter, requestPasswordReset);
@@ -45,7 +45,6 @@ router.route("/forgot-password/reset").post(otpLimiter, resetPassword);
 // Protected student routes
 router.use(verifyStudentJWT);
 
-router.route("/me").get(getStudentProfile);
 router.route("/profile").patch(updateStudentProfile);
 router.route("/dashboard").get(getStudentDashboard);
 router.route("/payments").get(getPaymentHistory);

@@ -3,6 +3,12 @@ import { Student } from "../models/student.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { SlotChangeHistory } from "../models/slotChangeHistory.model.js";
 import { ApiError } from "../utils/ApiError.js";
+import {
+  getAllSlotsWithOccupancy,
+  validateSlotHasCapacity,
+  validateSlotChange,
+  validateSlotSeatReduction,
+} from "../utils/slotHelpers.js";
 
 class SlotService {
   /**
@@ -72,17 +78,7 @@ class SlotService {
 
     // If reducing total seats, check if it's feasible
     if (updateData.totalSeats && updateData.totalSeats < slot.totalSeats) {
-      const occupiedSeats = await Student.countDocuments({
-        slotId: slot._id,
-        status: "ACTIVE",
-      });
-
-      if (occupiedSeats > updateData.totalSeats) {
-        throw new ApiError(
-          400,
-          `Cannot reduce seats below ${occupiedSeats} occupied seats`,
-        );
-      }
+      await validateSlotSeatReduction(slotId, updateData.totalSeats);
     }
 
     // Update slot
@@ -105,30 +101,69 @@ class SlotService {
 
   /**
    * Get slot with occupancy details
+   * OPTIMIZED: Use aggregation pipeline instead of separate queries
    */
   static async getSlotWithDetails(slotId) {
-    const slot = await Slot.findById(slotId);
+    const aggregation = await Slot.aggregate([
+      { $match: { _id: slotId } },
+      {
+        $lookup: {
+          from: "students",
+          let: { slotId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$slotId", "$$slotId"] },
+                status: "ACTIVE",
+              },
+            },
+            { $project: { name: 1, phone: 1, seatNumber: 1, joiningDate: 1 } },
+          ],
+          as: "activeStudents",
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          timeRange: 1,
+          totalSeats: 1,
+          capacity: {
+            totalSeats: "$totalSeats",
+            occupiedSeats: { $size: "$activeStudents" },
+            availableSeats: {
+              $subtract: ["$totalSeats", { $size: "$activeStudents" }],
+            },
+            occupancyPercentage: {
+              $round: [
+                {
+                  $multiply: [
+                    { $divide: [{ $size: "$activeStudents" }, "$totalSeats"] },
+                    100,
+                  ],
+                },
+              ],
+            },
+          },
+          students: "$activeStudents",
+        },
+      },
+    ]);
 
-    if (!slot) {
+    if (!aggregation || aggregation.length === 0) {
       throw new ApiError(404, "Slot not found");
     }
 
-    const activeStudents = await Student.find({
-      slotId: slot._id,
-      status: "ACTIVE",
-    }).select("name phone seatNumber joiningDate");
-
+    const slotData = aggregation[0];
     return {
-      slot: slot.toObject(),
-      occupancy: {
-        totalSeats: slot.totalSeats,
-        occupiedSeats: activeStudents.length,
-        availableSeats: slot.totalSeats - activeStudents.length,
-        occupancyPercentage: Math.round(
-          (activeStudents.length / slot.totalSeats) * 100,
-        ),
+      slot: {
+        _id: slotData._id,
+        name: slotData.name,
+        timeRange: slotData.timeRange,
+        totalSeats: slotData.totalSeats,
       },
-      students: activeStudents,
+      occupancy: slotData.capacity,
+      students: slotData.students,
     };
   }
 
@@ -136,27 +171,7 @@ class SlotService {
    * Get all slots with occupancy
    */
   static async getAllSlotsWithOccupancy() {
-    const slots = await Slot.find({ isActive: true }).lean();
-
-    const slotsWithOccupancy = await Promise.all(
-      slots.map(async (slot) => {
-        const occupiedSeats = await Student.countDocuments({
-          slotId: slot._id,
-          status: "ACTIVE",
-        });
-
-        return {
-          ...slot,
-          occupiedSeats,
-          availableSeats: slot.totalSeats - occupiedSeats,
-          occupancyPercentage: Math.round(
-            (occupiedSeats / slot.totalSeats) * 100,
-          ),
-        };
-      }),
-    );
-
-    return slotsWithOccupancy;
+    return getAllSlotsWithOccupancy();
   }
 
   /**
@@ -164,31 +179,15 @@ class SlotService {
    */
   static async changeStudentSlot(studentId, newSlotId, adminId, reason = "") {
     const student = await Student.findById(studentId).populate("slotId");
-    const newSlot = await Slot.findById(newSlotId);
-    const oldSlot = student.slotId;
-
     if (!student) {
       throw new ApiError(404, "Student not found");
     }
 
-    if (!newSlot) {
-      throw new ApiError(404, "New slot not found");
-    }
+    const oldSlot = student.slotId;
 
-    // Check if student is trying to move to same slot
-    if (oldSlot._id.toString() === newSlotId) {
-      throw new ApiError(400, "Student is already in this slot");
-    }
-
-    // Check if new slot has available seats
-    const occupiedSeats = await Student.countDocuments({
-      slotId: newSlotId,
-      status: "ACTIVE",
-    });
-
-    if (occupiedSeats >= newSlot.totalSeats) {
-      throw new ApiError(400, `Slot "${newSlot.name}" is full`);
-    }
+    // Validate slot change and capacity
+    validateSlotChange(oldSlot._id, newSlotId);
+    const { slot: newSlot } = await validateSlotHasCapacity(newSlotId);
 
     // Store old values
     const oldValues = {
@@ -248,31 +247,15 @@ class SlotService {
    */
   static async requestSlotChange(studentId, newSlotId, reason = "") {
     const student = await Student.findById(studentId).populate("slotId");
-    const newSlot = await Slot.findById(newSlotId);
-    const oldSlot = student.slotId;
-
     if (!student) {
       throw new ApiError(404, "Student not found");
     }
 
-    if (!newSlot) {
-      throw new ApiError(404, "New slot not found");
-    }
+    const oldSlot = student.slotId;
 
-    // Check if student is trying to move to same slot
-    if (oldSlot._id.toString() === newSlotId) {
-      throw new ApiError(400, "Student is already in this slot");
-    }
-
-    // Check if new slot has available seats
-    const occupiedSeats = await Student.countDocuments({
-      slotId: newSlotId,
-      status: "ACTIVE",
-    });
-
-    if (occupiedSeats >= newSlot.totalSeats) {
-      throw new ApiError(400, `Slot "${newSlot.name}" is full`);
-    }
+    // Validate slot change and capacity
+    validateSlotChange(oldSlot._id, newSlotId);
+    const { slot: newSlot } = await validateSlotHasCapacity(newSlotId);
 
     // Create slot change history record (stored as pending request)
     const changeRequest = await SlotChangeHistory.create({
@@ -362,27 +345,16 @@ class SlotService {
       throw new ApiError(400, "This request has already been approved");
     }
 
-    // Get student and new slot details
+    // Get student and validate new slot capacity
     const student = await Student.findById(changeRecord.studentId);
-    const newSlot = await Slot.findById(changeRecord.newSlotId);
 
     if (!student) {
       throw new ApiError(404, "Student not found");
     }
 
-    if (!newSlot) {
-      throw new ApiError(404, "New slot not found");
-    }
-
-    // Verify slot still has available seats
-    const occupiedSeats = await Student.countDocuments({
-      slotId: changeRecord.newSlotId,
-      status: "ACTIVE",
-    });
-
-    if (occupiedSeats >= newSlot.totalSeats) {
-      throw new ApiError(400, `Slot "${newSlot.name}" is now full`);
-    }
+    const { slot: newSlot } = await validateSlotHasCapacity(
+      changeRecord.newSlotId,
+    );
 
     // Update student's slot
     student.slotId = changeRecord.newSlotId;

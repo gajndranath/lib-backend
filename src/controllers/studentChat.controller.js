@@ -2,13 +2,18 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import ChatService from "../services/chat.service.js";
+import ChatEncryptionService from "../services/chatEncryption.service.js";
 import { ChatMessage } from "../models/chatMessage.model.js";
 import { Admin } from "../models/admin.model.js";
 import { Student } from "../models/student.model.js";
 import { FriendRequest } from "../models/friendRequest.model.js";
 import { StudentBlock } from "../models/studentBlock.model.js";
-import { ConversationKey } from "../models/conversationKey.model.js";
+import ChatKeyService from "../services/chatKey.service.js";
 import cacheService from "../utils/cache.js";
+import logger from "../utils/logger.js";
+import { UserKeyBackup } from "../models/userKeyBackup.model.js";
+
+const isKeyBackupDisabled = () => process.env.DISABLE_KEY_BACKUP === "true";
 
 const ensureNotBlocked = async (a, b) => {
   const blocked = await StudentBlock.findOne({
@@ -24,10 +29,19 @@ const ensureNotBlocked = async (a, b) => {
 };
 
 export const setStudentPublicKey = asyncHandler(async (req, res) => {
-  const { publicKey } = req.body;
+  const { publicKey, rotate = false } = req.body;
   if (!publicKey) throw new ApiError(400, "publicKey is required");
 
-  await Student.findByIdAndUpdate(req.student._id, { publicKey });
+  if (rotate) {
+    const student = await Student.findById(req.student._id).select("publicKey");
+    await Student.findByIdAndUpdate(req.student._id, {
+      publicKey,
+      previousPublicKey: student?.publicKey || null,
+      publicKeyRotatedAt: new Date(),
+    });
+  } else {
+    await Student.findByIdAndUpdate(req.student._id, { publicKey });
+  }
 
   // Invalidate cached public key for this student
   await cacheService.del(`chat:student:pk:${req.student._id}`);
@@ -36,7 +50,18 @@ export const setStudentPublicKey = asyncHandler(async (req, res) => {
 });
 
 export const setStudentKeyBackup = asyncHandler(async (req, res) => {
-  const { encryptedPrivateKey, salt, iv, version = 1, publicKey } = req.body;
+  if (isKeyBackupDisabled()) {
+    throw new ApiError(410, "Key backup storage is disabled");
+  }
+
+  const {
+    encryptedPrivateKey,
+    salt,
+    iv,
+    version = 1,
+    publicKey,
+    rotate = false,
+  } = req.body;
 
   if (!encryptedPrivateKey || !salt || !iv || !publicKey) {
     throw new ApiError(
@@ -45,14 +70,28 @@ export const setStudentKeyBackup = asyncHandler(async (req, res) => {
     );
   }
 
-  await Student.findByIdAndUpdate(req.student._id, {
-    publicKey,
-    encryptedPrivateKey,
-    keyBackupSalt: salt,
-    keyBackupIv: iv,
-    keyBackupVersion: version,
-    keyBackupUpdatedAt: new Date(),
-  });
+  if (rotate) {
+    const student = await Student.findById(req.student._id).select("publicKey");
+    await Student.findByIdAndUpdate(req.student._id, {
+      publicKey,
+      previousPublicKey: student?.publicKey || null,
+      publicKeyRotatedAt: new Date(),
+      encryptedPrivateKey,
+      keyBackupSalt: salt,
+      keyBackupIv: iv,
+      keyBackupVersion: version,
+      keyBackupUpdatedAt: new Date(),
+    });
+  } else {
+    await Student.findByIdAndUpdate(req.student._id, {
+      publicKey,
+      encryptedPrivateKey,
+      keyBackupSalt: salt,
+      keyBackupIv: iv,
+      keyBackupVersion: version,
+      keyBackupUpdatedAt: new Date(),
+    });
+  }
 
   await cacheService.del(`chat:student:pk:${req.student._id}`);
 
@@ -60,6 +99,10 @@ export const setStudentKeyBackup = asyncHandler(async (req, res) => {
 });
 
 export const getStudentKeyBackup = asyncHandler(async (req, res) => {
+  if (isKeyBackupDisabled()) {
+    throw new ApiError(410, "Key backup storage is disabled");
+  }
+
   const student = await Student.findById(req.student._id).select(
     "publicKey encryptedPrivateKey keyBackupSalt keyBackupIv keyBackupVersion",
   );
@@ -90,41 +133,16 @@ export const getStudentKeyBackup = asyncHandler(async (req, res) => {
 });
 
 export const getPublicKey = asyncHandler(async (req, res) => {
+  if (!req.admin && !req.student) {
+    throw new ApiError(401, "Authentication required to access public keys");
+  }
+
   const { userType, userId } = req.params;
-  const cacheKey =
-    userType === "Admin"
-      ? `chat:admin:pk:${userId}`
-      : `chat:student:pk:${userId}`;
+  const publicKey = await ChatKeyService.getPublicKey(userType, userId);
 
-  // Try cache first
-  let cachedKey = await cacheService.get(cacheKey);
-  if (cachedKey) {
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(200, { publicKey: cachedKey.publicKey }, "Public key"),
-      );
-  }
-
-  const Model = userType === "Admin" ? Admin : Student;
-  const user = await Model.findById(userId).select("publicKey");
-  if (!user) {
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, `${userType} not found`));
-  }
-
-  if (!user.publicKey) {
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, `${userType}'s public key not set yet`));
-  }
-
-  // Cache for 30 minutes
-  const keyData = { publicKey: user.publicKey };
-  await cacheService.set(cacheKey, keyData, 30 * 60);
-
-  return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { publicKey }, "Public key"));
 });
 
 // ========== CONVERSATION-BASED PUBLIC KEY MANAGEMENT ==========
@@ -140,20 +158,12 @@ export const setConversationPublicKey = asyncHandler(async (req, res) => {
   const userId = req.student._id;
   const userType = "Student";
 
-  // Upsert the conversation key
-  await ConversationKey.findOneAndUpdate(
-    { conversationId, userId, userType },
-    { publicKey },
-    { upsert: true, new: true },
-  );
-
-  // Invalidate cache
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-  await cacheService.del(cacheKey);
-
-  console.log(
-    `🔐 Set conversation public key: conv=${conversationId.slice(0, 8)}... user=${userId}`,
-  );
+  await ChatKeyService.setConversationPublicKey({
+    conversationId,
+    userId,
+    userType,
+    publicKey,
+  });
 
   return res
     .status(200)
@@ -167,115 +177,15 @@ export const getConversationPublicKey = asyncHandler(async (req, res) => {
     throw new ApiError(400, "conversationId, userId, userType are required");
   }
 
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-
-  // Try cache first
-  let cachedKey = await cacheService.get(cacheKey);
-  if (cachedKey) {
-    console.log(
-      `📦 Cache hit for conversation public key: conv=${conversationId.slice(0, 8)}...`,
-    );
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(200, { publicKey: cachedKey.publicKey }, "Public key"),
-      );
-  }
-
-  // Query database
-  const key = await ConversationKey.findOne({
+  const publicKey = await ChatKeyService.getConversationPublicKey({
     conversationId,
     userId,
     userType,
   });
 
-  if (!key) {
-    console.warn(
-      `⚠️ Conversation public key not found: conv=${conversationId.slice(0, 8)}... user=${userId}`,
-    );
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, "Conversation public key not found"));
-  }
-
-  console.log(
-    `✅ Found conversation public key from DB: conv=${conversationId.slice(0, 8)}...`,
-  );
-
-  // Cache for 30 minutes
-  const keyData = { publicKey: key.publicKey };
-  await cacheService.set(cacheKey, keyData, 30 * 60);
-
-  return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
-});
-
-// ========== CONVERSATION-BASED KEYPAIR MANAGEMENT (BACKUP) ==========
-// Stores full keypair (public + private) for recovery after logout
-
-export const setConversationKeyPair = asyncHandler(async (req, res) => {
-  const { conversationId } = req.params;
-  const { publicKey, privateKey } = req.body;
-
-  if (!publicKey || !privateKey) {
-    throw new ApiError(400, "publicKey and privateKey are required");
-  }
-
-  const userId = req.student._id;
-  const userType = "Student";
-
-  // Upsert the conversation keypair
-  await ConversationKey.findOneAndUpdate(
-    { conversationId, userId, userType },
-    { publicKey, privateKey },
-    { upsert: true, new: true },
-  );
-
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-  await cacheService.del(cacheKey);
-
-  console.log(
-    `🔐 Backed up conversation keypair: conv=${conversationId.slice(0, 8)}...`,
-  );
-
   return res
     .status(200)
-    .json(new ApiResponse(200, null, "Conversation keypair backed up"));
-});
-
-export const getConversationKeyPair = asyncHandler(async (req, res) => {
-  const { conversationId } = req.params;
-  const userId = req.student._id;
-  const userType = "Student";
-
-  const key = await ConversationKey.findOne({
-    conversationId,
-    userId,
-    userType,
-  }).select("publicKey privateKey");
-
-  if (!key?.privateKey) {
-    console.warn(
-      `⚠️ Conversation keypair not found: conv=${conversationId.slice(0, 8)}...`,
-    );
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, "Conversation keypair not found"));
-  }
-
-  console.log(
-    `✅ Retrieved conversation keypair: conv=${conversationId.slice(0, 8)}...`,
-  );
-
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        publicKey: key.publicKey,
-        privateKey: key.privateKey,
-      },
-      "Keypair",
-    ),
-  );
+    .json(new ApiResponse(200, { publicKey }, "Public key"));
 });
 
 // ========== CONVERSATION MANAGEMENT ==========
@@ -286,7 +196,7 @@ export const createOrGetConversation = asyncHandler(async (req, res) => {
     throw new ApiError(400, "recipientId and recipientType are required");
   }
 
-  console.log("Creating conversation:", {
+  logger.info("Creating conversation", {
     studentId: req.student._id,
     recipientId,
     recipientType,
@@ -304,11 +214,18 @@ export const createOrGetConversation = asyncHandler(async (req, res) => {
     });
 
     if (!friendship) {
-      console.log("No friendship found for student-to-student chat");
+      logger.warn("No friendship found for student-to-student chat", {
+        studentId: req.student._id,
+        recipientId,
+      });
       throw new ApiError(403, "You can only chat with accepted friends");
     }
   } else {
-    console.log("Admin conversation - no friend validation needed");
+    logger.debug("Admin conversation - no friend validation needed", {
+      studentId: req.student._id,
+      recipientId,
+      recipientType,
+    });
   }
 
   const conversation = await ChatService.getOrCreateConversation(
@@ -399,4 +316,122 @@ export const sendMessage = asyncHandler(async (req, res) => {
   });
 
   return res.status(201).json(new ApiResponse(201, message, "Message sent"));
+});
+
+// ✅ Edit message
+export const editMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { text, encryptedPayload } = req.body;
+
+  if (!encryptedPayload) {
+    throw new ApiError(400, "encryptedPayload is required");
+  }
+
+  const message = await ChatMessage.findById(messageId);
+  if (!message) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  // Check if requester is the sender (student)
+  if (message.senderId.toString() !== req.student._id.toString()) {
+    throw new ApiError(403, "Not authorized to edit this message");
+  }
+
+  ChatEncryptionService.validateEncryptedPayload(
+    encryptedPayload,
+    "Edited message",
+  );
+
+  // Update message
+  const previousRecipient = message.encryptedForRecipient;
+  const previousSender = message.encryptedForSender;
+
+  if (text) {
+    message.text = text;
+  }
+
+  message.encryptedForRecipient = encryptedPayload;
+  message.encryptedForSender = encryptedPayload;
+  message.editedAt = new Date();
+  if (!message.editHistory) {
+    message.editHistory = [];
+  }
+  message.editHistory.push({
+    editedAt: new Date(),
+    encryptedForRecipient: previousRecipient,
+    encryptedForSender: previousSender,
+  });
+
+  await message.save();
+
+  const payload = ChatEncryptionService.unwrapAtRestMessage(message);
+
+  return res.status(200).json(new ApiResponse(200, payload, "Message edited"));
+});
+
+// ✅ Delete message
+export const deleteMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+
+  const message = await ChatMessage.findById(messageId);
+  if (!message) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  // Check if requester is the sender (student)
+  if (message.senderId.toString() !== req.student._id.toString()) {
+    throw new ApiError(403, "Not authorized to delete this message");
+  }
+
+  // Soft delete
+  message.isDeleted = true;
+  message.deletedAt = new Date();
+  await message.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Message deleted successfully"));
+});
+
+// ✅ Forward message
+export const forwardMessage = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { text, encryptedPayload } = req.body;
+
+  const originalMessage = await ChatMessage.findById(messageId);
+  if (!originalMessage) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  if (!encryptedPayload) {
+    throw new ApiError(400, "Message must be re-encrypted for new recipient");
+  }
+
+  ChatEncryptionService.validateEncryptedPayload(
+    encryptedPayload,
+    "Forwarded message",
+  );
+
+  // Create new message with forwardedFrom reference
+  const newMessage = new ChatMessage({
+    conversationId: originalMessage.conversationId,
+    senderId: req.student._id,
+    senderType: "Student",
+    recipientId: originalMessage.recipientId,
+    recipientType: originalMessage.recipientType,
+    text: text || originalMessage.text,
+    encryptedForRecipient: encryptedPayload,
+    encryptedForSender: encryptedPayload,
+    forwardedFrom: messageId,
+    contentType: originalMessage.contentType || "TEXT",
+    status: "SENT",
+  });
+
+  await newMessage.save();
+
+  const payload = ChatEncryptionService.unwrapAtRestMessage(newMessage);
+
+  return res
+    .status(201)
+    .json(new ApiResponse(201, payload, "Message forwarded"));
 });

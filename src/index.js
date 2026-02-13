@@ -1,4 +1,9 @@
 import dotenv from "dotenv";
+
+// ✅ Load environment variables FIRST before importing anything else
+dotenv.config({ path: "./.env" });
+
+import logger from "./utils/logger.js";
 import connectDB from "./config/db.js";
 import { app } from "./app.js";
 import { Server } from "socket.io";
@@ -14,11 +19,17 @@ import {
 } from "./utils/socketOptimizer.js";
 import { monitorConnectionPool } from "./utils/queryOptimizations.js";
 import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
-
-dotenv.config({ path: "./.env" });
+import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.js";
 
 // Initialize notification services
 (async () => {
+  logger.info("🚀 Server initialization started", {
+    env: process.env.NODE_ENV,
+  });
+
+  // ✅ Initialize Redis for rate limiting FIRST (after dotenv)
+  initRedisForRateLimiting();
+
   initializeFirebase();
   await initializeEmail(); // ✅ Await email initialization with retries
   initializeWebPush();
@@ -29,9 +40,9 @@ dotenv.config({ path: "./.env" });
   // Socket.io initialization with OPTIMIZED CONFIG
   const io = new Server(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN?.split(",") || [
-        "https://lib-frontend-roan.vercel.app/students/new",
-      ],
+      origin:
+        process.env.CORS_ORIGIN?.split(",") || [" http://localhost:5173"] ||
+        "http://localhost:3000",
       credentials: true,
       methods: ["GET", "POST"],
       allowedHeaders: ["Authorization", "Content-Type"],
@@ -66,14 +77,17 @@ dotenv.config({ path: "./.env" });
       const PORT = process.env.PORT || 8000;
 
       server.listen(PORT, () => {
-        console.log(`🚀 Server running on port: ${PORT}`);
-        console.log(`⏰ Cron Jobs are active and monitoring payments.`);
-        console.log(
+        logger.info(`✅ Server running on port: ${PORT}`, {
+          port: PORT,
+          environment: process.env.NODE_ENV,
+        });
+        logger.info("⏰ Cron Jobs are active and monitoring payments");
+        logger.info(
           `📧 Email service: ${
             process.env.EMAIL_USER ? "✅ Configured" : "❌ Not configured"
           }`,
         );
-        console.log(
+        logger.info(
           `🔥 Firebase: ${
             process.env.FIREBASE_PROJECT_ID
               ? "✅ Configured"

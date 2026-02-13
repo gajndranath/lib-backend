@@ -2,31 +2,51 @@ import rateLimit from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
 import Redis from "ioredis";
 
-// Check if Redis URL is provided
-if (!process.env.REDIS_URL) {
-  console.warn("REDIS_URL not set, using in-memory store for rate limiting");
-}
-
 let redisClient;
+let redisInitialized = false;
 
-if (process.env.REDIS_URL) {
-  redisClient = new Redis(process.env.REDIS_URL);
+function initializeRedis() {
+  if (redisInitialized) return;
+  redisInitialized = true;
 
-  redisClient.on("error", (err) => {
-    console.error("❌ Redis connection error:", err);
-  });
+  // Check if Redis URL is provided
+  if (!process.env.REDIS_URL) {
+    // Silent skip - Redis is optional, rate limiting has fallback
+    return;
+  }
 
-  redisClient.on("connect", () => {
-    console.log("✅ Redis connected");
-  });
-} else {
-  console.log("⚠️ Using in-memory store for rate limiting (not ideal)");
+  try {
+    redisClient = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      enableReadyCheck: true,
+      retryStrategy(times) {
+        const delay = Math.min(times * 50, 2000);
+        return delay;
+      },
+    });
+
+    redisClient.on("error", (err) => {
+      console.error("❌ Redis connection error:", err.message);
+    });
+
+    redisClient.on("connect", () => {
+      console.log("✅ Redis connected successfully");
+    });
+
+    redisClient.on("ready", () => {
+      console.log("✅ Redis is ready to accept commands");
+    });
+  } catch (error) {
+    console.error("❌ Failed to initialize Redis:", error.message);
+    redisClient = null;
+  }
 }
 
 // ✅ RULE 9: Export Redis client for use with TTL
 export const getRedisClient = () => {
+  initializeRedis(); // Lazy initialization
+
   if (!redisClient) {
-    console.warn("⚠️ Redis not available, operations will be async-only");
     // Return a no-op client
     return {
       setEx: () => Promise.resolve(),

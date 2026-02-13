@@ -61,5 +61,7 @@ slotSchema.virtual("availableSeats").get(function () {
 // Indexes
 slotSchema.index({ name: 1 }, { unique: true });
 slotSchema.index({ isActive: 1 });
+// Compound indexes for occupancy and filtering queries
+slotSchema.index({ isActive: 1, totalSeats: 1 });
 
 export const Slot = mongoose.model("Slot", slotSchema);

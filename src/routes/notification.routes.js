@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { verifyStudentJWT } from "../middlewares/studentAuth.middleware.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import {
   savePushSubscription,
@@ -19,8 +20,19 @@ import {
 
 const router = Router();
 
-// Apply authentication to all routes
-router.use(verifyJWT);
+// Apply student or admin authentication to all routes
+router.use((req, res, next) => {
+  // Try student JWT first
+  verifyStudentJWT(req, res, (err) => {
+    if (!err && req.student) return next();
+    // If not student, try admin JWT
+    verifyJWT(req, res, (err2) => {
+      if (!err2 && req.admin) return next();
+      // If neither, unauthorized
+      res.status(401).json({ message: "Unauthorized: no valid token" });
+    });
+  });
+});
 
 // High-frequency notification operations - use notification limiter
 router.route("/history").get(notificationLimiter, getNotificationHistory);

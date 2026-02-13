@@ -4,6 +4,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import StudentService from "../services/student.service.js";
 import FeeService from "../services/fee.service.js";
 import SlotService from "../services/slot.service.js";
+import StudentNotificationService from "../services/studentNotification.service.js";
 import { studentRegistrationSchema } from "../utils/validators.js";
 
 export const registerStudent = asyncHandler(async (req, res) => {
@@ -276,26 +277,15 @@ export const savePushSubscription = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
   const { subscription, type = "web", deviceInfo = {} } = req.body;
 
-  if (!subscription) {
-    throw new ApiError(400, "Subscription is required");
-  }
-
-  const Student = (await import("../models/student.model.js")).Student;
-
-  // Update based on type
-  if (type === "web") {
-    await Student.findByIdAndUpdate(studentId, {
-      webPushSubscription: subscription,
-    });
-  } else if (type === "fcm") {
-    await Student.findByIdAndUpdate(studentId, {
-      fcmToken: subscription.token || subscription,
-    });
-  }
+  const student = await StudentNotificationService.savePushSubscription(
+    studentId,
+    subscription,
+    type,
+  );
 
   return res
     .status(200)
-    .json(new ApiResponse(200, null, "Subscription saved successfully"));
+    .json(new ApiResponse(200, student, "Subscription saved successfully"));
 });
 
 // Remove student push subscription
@@ -303,21 +293,14 @@ export const removePushSubscription = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
   const { type = "web" } = req.body;
 
-  const Student = (await import("../models/student.model.js")).Student;
-
-  if (type === "web") {
-    await Student.findByIdAndUpdate(studentId, {
-      webPushSubscription: null,
-    });
-  } else if (type === "fcm") {
-    await Student.findByIdAndUpdate(studentId, {
-      fcmToken: null,
-    });
-  }
+  const student = await StudentNotificationService.removePushSubscription(
+    studentId,
+    type,
+  );
 
   return res
     .status(200)
-    .json(new ApiResponse(200, null, "Subscription removed successfully"));
+    .json(new ApiResponse(200, student, "Subscription removed successfully"));
 });
 
 // Get receipt details (admin)

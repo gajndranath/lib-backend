@@ -9,15 +9,30 @@ import FeeService from "../services/fee.service.js";
 import { sendEmail } from "../config/email.config.js";
 import admin from "firebase-admin";
 import { getVapidPublicKey } from "../config/webpush.config.js";
+import { StudentStatus } from "../constants/constants.js";
+import {
+  generateLibraryId,
+  generateOtp,
+  hashOtp,
+  checkEmailExists,
+  checkPhoneExists,
+} from "../utils/studentHelpers.js";
 
 const otpRequestSchema = z.object({
-  email: z.string().email(),
-  purpose: z.enum(["LOGIN", "RESET", "VERIFY"]).optional(),
+  email: z.string().trim().email(),
+  purpose: z
+    .string()
+    .trim()
+    .transform((value) => value.toUpperCase())
+    .refine((value) => ["LOGIN", "RESET", "VERIFY"].includes(value), {
+      message: "Invalid purpose",
+    })
+    .optional(),
 });
 
 const otpVerifySchema = z.object({
-  email: z.string().email(),
-  otp: z.string().min(4).max(8),
+  email: z.string().trim().email(),
+  otp: z.string().trim().min(4).max(8),
   setPassword: z.string().min(6).optional(),
 });
 
@@ -35,10 +50,7 @@ const resetSchema = z.object({
 const registerSchema = z.object({
   name: z.string().min(2).max(100),
   email: z.string().email(),
-  phone: z
-    .string()
-    .regex(/^\d{10}$/)
-    .optional(),
+  phone: z.string().regex(/^\d{10}$/), // ✅ Required for student
   address: z.string().optional(),
   fatherName: z.string().optional(),
 });
@@ -58,11 +70,7 @@ const updateProfileSchema = z
 
 const OTP_EXP_MIN = 10;
 
-const generateOtp = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
-
-const hashOtp = (otp) => crypto.createHash("sha256").update(otp).digest("hex");
-
+// ✅ Helper function to send OTP emails
 const sendOtpEmail = async (email, otp, purpose) => {
   const purposeText =
     purpose === "RESET"
@@ -76,6 +84,10 @@ const sendOtpEmail = async (email, otp, purpose) => {
   return await sendEmail(email, subject, text);
 };
 
+// ========================================
+// STUDENT SELF-REGISTRATION FLOW
+// ========================================
+
 export const registerStudent = asyncHandler(async (req, res) => {
   const validation = registerSchema.safeParse(req.body);
   if (!validation.success) {
@@ -84,30 +96,22 @@ export const registerStudent = asyncHandler(async (req, res) => {
 
   const { name, email, phone, address, fatherName } = validation.data;
 
-  // Check if student with email already exists
-  const existingStudent = await Student.findOne({
-    email: email.toLowerCase(),
-    isDeleted: false,
-  });
-
-  if (existingStudent) {
-    throw new ApiError(409, "Student with this email already exists");
+  // ✅ Check email uniqueness
+  const existingEmail = await checkEmailExists(email);
+  if (existingEmail) {
+    throw new ApiError(409, "Email already registered");
   }
 
-  // Generate a unique library ID
-  const lastStudent = await Student.findOne({ isDeleted: false })
-    .sort({ createdAt: -1 })
-    .select("libraryId");
-
-  let libraryId;
-  if (lastStudent && lastStudent.libraryId) {
-    const lastIdNumber = parseInt(lastStudent.libraryId.replace(/\D/g, ""));
-    libraryId = `LIB${String(lastIdNumber + 1).padStart(4, "0")}`;
-  } else {
-    libraryId = "LIB0001";
+  // ✅ Check phone uniqueness
+  const existingPhone = await checkPhoneExists(phone);
+  if (existingPhone) {
+    throw new ApiError(409, "Phone number already registered");
   }
 
-  // Create new student (inactive until email verified)
+  // ✅ Generate library ID
+  const libraryId = await generateLibraryId();
+
+  // ✅ Create student (INACTIVE until verified)
   const student = await Student.create({
     libraryId,
     name,
@@ -115,38 +119,52 @@ export const registerStudent = asyncHandler(async (req, res) => {
     phone,
     address,
     fatherName,
-    monthlyFee: 0, // Default fee, can be updated by admin later
-    status: "inactive",
+    status: StudentStatus.INACTIVE,
     emailVerified: false,
   });
 
-  // Generate and send OTP
+  // ✅ Generate and save OTP
   const otp = generateOtp();
-  const hashedOtp = hashOtp(otp);
-  const otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
-
-  student.otpHash = hashedOtp;
-  student.otpExpiresAt = otpExpiresAt;
+  student.otpHash = hashOtp(otp);
+  student.otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
   student.otpPurpose = "VERIFY";
-  await student.save();
+  await student.save({ validateBeforeSave: false });
 
-  await sendOtpEmail(email, otp, "VERIFY");
+  // ✅ Send verification email
+  // ...existing code...
+  const emailResult = await sendOtpEmail(email, otp, "VERIFY");
 
-  return res
-    .status(201)
-    .json(
-      new ApiResponse(
-        201,
-        { email: student.email, libraryId: student.libraryId },
-        "Registration successful. OTP sent to email.",
-      ),
-    );
+  if (emailResult?.success) {
+    // ...existing code...
+  } else {
+    // ...existing code...
+  }
+
+  return res.status(201).json(
+    new ApiResponse(
+      201,
+      {
+        email: student.email,
+        libraryId: student.libraryId,
+        message: "Check your email for verification code",
+      },
+      "Registration successful. Please verify your email.",
+    ),
+  );
 });
 
+// ========================================
+// OTP REQUEST & VERIFICATION
+// ========================================
+
+/**
+ * Request OTP (SEND EMAIL) - for login/reset/registration
+ */
 export const requestEmailOtp = asyncHandler(async (req, res) => {
   const validation = otpRequestSchema.safeParse(req.body);
   if (!validation.success) {
-    throw new ApiError(400, "Validation Error", validation.error.errors);
+    // ...existing code...
+    throw new ApiError(400, "Validation Error", validation.error.issues);
   }
 
   const { email, purpose = "LOGIN" } = validation.data;
@@ -168,6 +186,7 @@ export const requestEmailOtp = asyncHandler(async (req, res) => {
   student.otpPurpose = purpose;
 
   await student.save({ validateBeforeSave: false });
+  // ...existing code...
   await sendOtpEmail(student.email, otp, purpose);
 
   return res
@@ -175,10 +194,13 @@ export const requestEmailOtp = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, null, "OTP sent successfully"));
 });
 
-export const verifyEmailOtp = asyncHandler(async (req, res) => {
+/**
+ * Verify OTP and authenticate/activate account
+ */
+export const verifyOtpAndAuthenticate = asyncHandler(async (req, res) => {
   const validation = otpVerifySchema.safeParse(req.body);
   if (!validation.success) {
-    throw new ApiError(400, "Validation Error", validation.error.errors);
+    throw new ApiError(400, "Validation Error", validation.error.issues);
   }
 
   const { email, otp, setPassword } = validation.data;
@@ -201,7 +223,11 @@ export const verifyEmailOtp = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid OTP");
   }
 
+  // ✅ Verify email and activate account (if INACTIVE)
   student.emailVerified = true;
+  if (student.status === StudentStatus.INACTIVE) {
+    student.status = StudentStatus.ACTIVE;
+  }
   student.otpHash = undefined;
   student.otpExpiresAt = undefined;
   student.otpPurpose = undefined;
@@ -403,18 +429,23 @@ export const updateStudentProfile = asyncHandler(async (req, res) => {
 });
 
 export const getStudentDashboard = asyncHandler(async (req, res) => {
-  const student = await Student.findById(req.student._id)
+  const { Student } = await import("../models/student.model.js");
+  const { StudentMonthlyFee } =
+    await import("../models/studentMonthlyFee.model.js");
+  const studentDoc = await Student.findById(req.student._id)
     .populate({
       path: "slotId",
-      select: "name timeRange monthlyFee totalSeats",
+      select:
+        "name timeRange monthlyFee totalSeats isActive createdAt updatedAt",
+      model: "Slot",
     })
     .select("-password -otpHash -otpExpiresAt -otpPurpose");
 
-  if (!student) {
+  if (!studentDoc) {
     throw new ApiError(404, "Student not found");
   }
 
-  const studentId = student._id;
+  const studentId = studentDoc._id;
 
   const [feeSummary, recentPayments] = await Promise.all([
     FeeService.getStudentFeeSummary(studentId),
@@ -432,6 +463,45 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
     .limit(3)
     .lean();
 
+  // Build a full student profile object for dashboard (all personal fields)
+  const student = {
+    _id: studentDoc._id,
+    name: studentDoc.name,
+    phone: studentDoc.phone,
+    email: studentDoc.email,
+    emailVerified: studentDoc.emailVerified,
+    phoneVerified: studentDoc.phoneVerified,
+    address: studentDoc.address,
+    fatherName: studentDoc.fatherName,
+    monthlyFee: studentDoc.monthlyFee,
+    feeOverride: studentDoc.feeOverride,
+    status: studentDoc.status,
+    isDeleted: studentDoc.isDeleted,
+    keyBackupVersion: studentDoc.keyBackupVersion,
+    tags: studentDoc.tags,
+    joiningDate: studentDoc.joiningDate,
+    createdAt: studentDoc.createdAt,
+    updatedAt: studentDoc.updatedAt,
+    billingDay: studentDoc.billingDay,
+    nextBillingDate: studentDoc.nextBillingDate,
+    webPushSubscription: studentDoc.webPushSubscription,
+    joiningMonth: studentDoc.joiningMonth,
+    seatNumber: studentDoc.seatNumber,
+    slot:
+      studentDoc.slotId && typeof studentDoc.slotId === "object"
+        ? {
+            _id: studentDoc.slotId._id,
+            name: studentDoc.slotId.name,
+            timeRange: studentDoc.slotId.timeRange,
+            monthlyFee: studentDoc.slotId.monthlyFee,
+            totalSeats: studentDoc.slotId.totalSeats,
+            isActive: studentDoc.slotId.isActive,
+            createdAt: studentDoc.slotId.createdAt,
+            updatedAt: studentDoc.slotId.updatedAt,
+          }
+        : null,
+  };
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -445,8 +515,13 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
     ),
   );
 });
+// ========================================
+// PASSWORD-BASED LOGIN
+// ========================================
 
-export const getPaymentHistory = asyncHandler(async (req, res) => {
+/**
+ * Student login with email and password
+ */ export const getPaymentHistory = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20 } = req.query;
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -475,8 +550,13 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
     ),
   );
 });
+// ========================================
+// LOGOUT & SESSION MANAGEMENT
+// ========================================
 
-export const getStudentNotifications = asyncHandler(async (req, res) => {
+/**
+ * Student logout
+ */ export const getStudentNotifications = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, unreadOnly = false } = req.query;
   const skip = (parseInt(page) - 1) * parseInt(limit);
 

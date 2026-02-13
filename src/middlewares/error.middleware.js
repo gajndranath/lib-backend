@@ -1,9 +1,10 @@
 import { ApiError } from "../utils/ApiError.js";
+import logger from "../utils/logger.js";
 
 const errorHandler = (err, req, res, next) => {
   // Ensure next exists before using it
   if (typeof next !== "function") {
-    console.error("❌ Invalid middleware chain - next is not a function");
+    logger.error("Invalid middleware chain - next is not a function");
     return res.status(500).json({
       success: false,
       statusCode: 500,
@@ -66,13 +67,15 @@ const errorHandler = (err, req, res, next) => {
   if (process.env.NODE_ENV === "production" && statusCode === 500) {
     message = "Internal Server Error";
     // Log the actual error server-side for debugging
-    console.error("[PRODUCTION ERROR]", {
-      timestamp: new Date().toISOString(),
+    logger.error(err.message, {
       path: req.path,
       method: req.method,
-      error: err.message,
       stack: err.stack,
+      statusCode: 500,
     });
+  } else if (statusCode >= 400) {
+    // Log all client errors (4xx)
+    logger.warn(`${req.method} ${req.path} - ${statusCode}: ${message}`);
   }
 
   res.status(statusCode).json({

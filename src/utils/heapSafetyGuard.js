@@ -12,13 +12,22 @@ import v8 from "v8";
 import { getRedisClient } from "../config/redis.js";
 
 let redisClient;
-try {
-  redisClient = getRedisClient();
-} catch (err) {
-  console.warn(
-    "⚠️ Redis client not available in heapSafetyGuard, alerts will be logged to console only",
-  );
-}
+let redisInitAttempted = false;
+
+// ✅ Lazy initialization - only when actually needed
+const getRedis = () => {
+  if (!redisInitAttempted) {
+    redisInitAttempted = true;
+    try {
+      redisClient = getRedisClient();
+    } catch (err) {
+      console.warn(
+        "⚠️ Redis client not available in heapSafetyGuard, alerts will be logged to console only",
+      );
+    }
+  }
+  return redisClient;
+};
 
 export class HeapSafetyGuard {
   constructor() {
@@ -125,16 +134,19 @@ export class HeapSafetyGuard {
 
     // Store alert in Redis
     try {
-      redisClient
-        .lpush(
-          "heap_alerts",
-          JSON.stringify({
-            level: "CRITICAL",
-            stats,
-            timestamp: new Date(),
-          }),
-        )
-        .catch((err) => console.error("Failed to log alert:", err));
+      const redis = getRedis();
+      if (redis) {
+        redis
+          .lpush(
+            "heap_alerts",
+            JSON.stringify({
+              level: "CRITICAL",
+              stats,
+              timestamp: new Date(),
+            }),
+          )
+          .catch((err) => console.error("Failed to log alert:", err));
+      }
     } catch (err) {
       console.error("Alert logging failed:", err);
     }
@@ -166,17 +178,20 @@ export class HeapSafetyGuard {
 
     // Store emergency alert
     try {
-      redisClient
-        .lpush(
-          "heap_alerts",
-          JSON.stringify({
-            level: "EMERGENCY",
-            stats,
-            indicators: this.leakIndicators,
-            timestamp: new Date(),
-          }),
-        )
-        .catch((err) => console.error("Failed to log emergency:", err));
+      const redis = getRedis();
+      if (redis) {
+        redis
+          .lpush(
+            "heap_alerts",
+            JSON.stringify({
+              level: "EMERGENCY",
+              stats,
+              indicators: this.leakIndicators,
+              timestamp: new Date(),
+            }),
+          )
+          .catch((err) => console.error("Failed to log emergency:", err));
+      }
     } catch (err) {
       console.error("Emergency logging failed:", err);
     }

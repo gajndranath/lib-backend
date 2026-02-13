@@ -14,7 +14,7 @@
     "dev:cluster": "cross-env NODE_ENV=development nodemon src/cluster.js",
     "prod": "cross-env NODE_ENV=production node src/index.js",
     "prod:cluster": "cross-env NODE_ENV=production node src/cluster.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test",
     "audit": "npm audit",
     "audit:fix": "npm audit fix",
     "load-test": "artillery run load-test.yml",

@@ -24,15 +24,19 @@ export const verifyJWT = asyncHandler(async (req, _, next) => {
       throw error;
     }
 
-    const admin = await Admin.findById(decodedToken?._id).select("-password");
-
-    if (!admin) throw new ApiError(401, "Invalid Access Token");
-
-    // Check if admin is active
-    if (!admin.isActive) throw new ApiError(403, "Admin account is inactive");
-
-    req.admin = admin;
-    next();
+    // Accept both ADMIN and SUPER_ADMIN roles
+    if (
+      decodedToken?.role === "ADMIN" ||
+      decodedToken?.role === "SUPER_ADMIN"
+    ) {
+      const admin = await Admin.findById(decodedToken?._id).select("-password");
+      if (!admin) throw new ApiError(401, "Invalid Access Token");
+      if (!admin.isActive) throw new ApiError(403, "Admin account is inactive");
+      req.admin = admin;
+      next();
+    } else {
+      throw new ApiError(401, "Unauthorized: Not an admin token");
+    }
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(401, error?.message || "Invalid access token");

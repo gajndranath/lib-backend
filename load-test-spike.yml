@@ -1,0 +1,49 @@
+config:
+  target: "http://localhost:8000"
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      name: "Normal load - 5 users"
+    - duration: 10
+      arrivalRate: 50
+      name: "Spike - instant jump to 50 users"
+    - duration: 60
+      arrivalRate: 50
+      name: "Sustained spike - 50 users for 1 minute"
+    - duration: 120
+      arrivalRate: 5
+      name: "Recovery - back to 5 users for 2 minutes"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+  variables:
+    adminEmail: "superadmin@library.com"
+    adminPassword: "admin123"
+
+scenarios:
+  - name: "API Spike Test Workflow"
+    flow:
+      - post:
+          url: "/api/v1/admin/login"
+          json:
+            email: "{{ adminEmail }}"
+            password: "{{ adminPassword }}"
+          capture:
+            json: "$.data.accessToken"
+            as: "token"
+      - think: 1
+      - get:
+          url: "/api/v1/students?page=1&limit=20"
+          headers:
+            Authorization: "Bearer {{ token }}"
+      - think: 1
+      - get:
+          url: "/api/v1/slots"
+          headers:
+            Authorization: "Bearer {{ token }}"
+      - think: 2
+      - get:
+          url: "/api/v1/admin/profile"
+          headers:
+            Authorization: "Bearer {{ token }}"
+      - think: 1

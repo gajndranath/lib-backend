@@ -84,7 +84,16 @@ export const getNotificationHistory = asyncHandler(async (req, res) => {
   const Notification = (await import("../models/notification.model.js"))
     .default;
 
-  const query = { userId: req.admin._id };
+  // Support both student and admin
+  const userId = req.student
+    ? req.student._id
+    : req.admin
+      ? req.admin._id
+      : undefined;
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized: user not found" });
+  }
+  const query = { userId };
   if (unreadOnly === "true") {
     query.read = false;
   }
@@ -98,7 +107,7 @@ export const getNotificationHistory = asyncHandler(async (req, res) => {
     Notification.countDocuments(query),
   ]);
 
-  const unreadCount = await Notification.getUnreadCount(req.admin._id);
+  const unreadCount = await Notification.getUnreadCount(userId);
 
   return res.status(200).json(
     new ApiResponse(

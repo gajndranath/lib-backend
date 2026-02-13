@@ -5,20 +5,44 @@ import ChatService from "../services/chat.service.js";
 import { ChatMessage } from "../models/chatMessage.model.js";
 import { Admin } from "../models/admin.model.js";
 import { Student } from "../models/student.model.js";
-import { ConversationKey } from "../models/conversationKey.model.js";
+import ChatEncryptionService from "../services/chatEncryption.service.js";
+import ChatKeyService from "../services/chatKey.service.js";
 import cacheService from "../utils/cache.js";
+import { UserKeyBackup } from "../models/userKeyBackup.model.js";
+
+const isKeyBackupDisabled = () => process.env.DISABLE_KEY_BACKUP === "true";
 
 export const setAdminPublicKey = asyncHandler(async (req, res) => {
-  const { publicKey } = req.body;
+  const { publicKey, rotate = false } = req.body;
   if (!publicKey) throw new ApiError(400, "publicKey is required");
 
-  await Admin.findByIdAndUpdate(req.admin._id, { publicKey });
+  if (rotate) {
+    const admin = await Admin.findById(req.admin._id).select("publicKey");
+    await Admin.findByIdAndUpdate(req.admin._id, {
+      publicKey,
+      previousPublicKey: admin?.publicKey || null,
+      publicKeyRotatedAt: new Date(),
+    });
+  } else {
+    await Admin.findByIdAndUpdate(req.admin._id, { publicKey });
+  }
   await cacheService.del(`chat:admin:pk:${req.admin._id}`);
   return res.status(200).json(new ApiResponse(200, null, "Public key updated"));
 });
 
 export const setAdminKeyBackup = asyncHandler(async (req, res) => {
-  const { encryptedPrivateKey, salt, iv, version = 1, publicKey } = req.body;
+  if (isKeyBackupDisabled()) {
+    throw new ApiError(410, "Key backup storage is disabled");
+  }
+
+  const {
+    encryptedPrivateKey,
+    salt,
+    iv,
+    version = 1,
+    publicKey,
+    rotate = false,
+  } = req.body;
 
   if (!encryptedPrivateKey || !salt || !iv || !publicKey) {
     throw new ApiError(
@@ -27,8 +51,27 @@ export const setAdminKeyBackup = asyncHandler(async (req, res) => {
     );
   }
 
+  const admin = await Admin.findById(req.admin._id).select(
+    "publicKey encryptedPrivateKey keyBackupSalt keyBackupIv keyBackupVersion",
+  );
+
+  if (rotate && admin?.encryptedPrivateKey) {
+    await UserKeyBackup.create({
+      userId: req.admin._id,
+      userType: "Admin",
+      publicKey: admin.publicKey,
+      encryptedPrivateKey: admin.encryptedPrivateKey,
+      keyBackupSalt: admin.keyBackupSalt,
+      keyBackupIv: admin.keyBackupIv,
+      keyBackupVersion: admin.keyBackupVersion ?? 1,
+      rotatedAt: new Date(),
+    });
+  }
+
   await Admin.findByIdAndUpdate(req.admin._id, {
     publicKey,
+    previousPublicKey: rotate ? admin?.publicKey || null : undefined,
+    publicKeyRotatedAt: rotate ? new Date() : undefined,
     encryptedPrivateKey,
     keyBackupSalt: salt,
     keyBackupIv: iv,
@@ -42,6 +85,10 @@ export const setAdminKeyBackup = asyncHandler(async (req, res) => {
 });
 
 export const getAdminKeyBackup = asyncHandler(async (req, res) => {
+  if (isKeyBackupDisabled()) {
+    throw new ApiError(410, "Key backup storage is disabled");
+  }
+
   const admin = await Admin.findById(req.admin._id).select(
     "publicKey encryptedPrivateKey keyBackupSalt keyBackupIv keyBackupVersion",
   );
@@ -54,6 +101,38 @@ export const getAdminKeyBackup = asyncHandler(async (req, res) => {
     return res
       .status(404)
       .json(new ApiResponse(404, null, "Key backup not found"));
+  }
+
+  const requestedVersion = req.query?.version
+    ? parseInt(req.query.version, 10)
+    : null;
+
+  if (requestedVersion && admin.keyBackupVersion !== requestedVersion) {
+    const backup = await UserKeyBackup.findOne({
+      userId: req.admin._id,
+      userType: "Admin",
+      keyBackupVersion: requestedVersion,
+    });
+
+    if (!backup) {
+      return res
+        .status(404)
+        .json(new ApiResponse(404, null, "Key backup not found"));
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          publicKey: backup.publicKey,
+          encryptedPrivateKey: backup.encryptedPrivateKey,
+          salt: backup.keyBackupSalt,
+          iv: backup.keyBackupIv,
+          version: backup.keyBackupVersion,
+        },
+        "Key backup",
+      ),
+    );
   }
 
   return res.status(200).json(
@@ -72,50 +151,16 @@ export const getAdminKeyBackup = asyncHandler(async (req, res) => {
 });
 
 export const getPublicKey = asyncHandler(async (req, res) => {
+  if (!req.admin && !req.student) {
+    throw new ApiError(401, "Authentication required to access public keys");
+  }
+
   const { userType, userId } = req.params;
-  const cacheKey =
-    userType === "Admin"
-      ? `chat:admin:pk:${userId}`
-      : `chat:student:pk:${userId}`;
+  const publicKey = await ChatKeyService.getPublicKey(userType, userId);
 
-  // Try cache first
-  const cacheService = (await import("../utils/cache.js")).default;
-  let cachedKey = await cacheService.get(cacheKey);
-  if (cachedKey) {
-    console.log(`📦 Cache hit for ${userType} ${userId} public key`);
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(200, { publicKey: cachedKey.publicKey }, "Public key"),
-      );
-  }
-
-  const Model = userType === "Admin" ? Admin : Student;
-  const user = await Model.findById(userId).select("publicKey");
-  if (!user) {
-    console.warn(`⚠️ ${userType} ${userId} not found`);
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, `${userType} not found`));
-  }
-
-  if (!user.publicKey) {
-    console.warn(
-      `⚠️ ${userType} ${userId} has no public key set yet. Stored keys:`,
-      user.publicKey ? "EXISTS" : "MISSING",
-    );
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, `${userType}'s public key not set yet`));
-  }
-
-  console.log(`✅ Found ${userType} ${userId} public key from DB`);
-
-  // Cache for 30 minutes
-  const keyData = { publicKey: user.publicKey };
-  await cacheService.set(cacheKey, keyData, 30 * 60);
-
-  return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { publicKey }, "Public key"));
 });
 
 // ========== CONVERSATION-BASED PUBLIC KEY MANAGEMENT ==========
@@ -131,20 +176,12 @@ export const setConversationPublicKey = asyncHandler(async (req, res) => {
   const userId = req.admin._id;
   const userType = "Admin";
 
-  // Upsert the conversation key
-  await ConversationKey.findOneAndUpdate(
-    { conversationId, userId, userType },
-    { publicKey },
-    { upsert: true, new: true },
-  );
-
-  // Invalidate cache
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-  await cacheService.del(cacheKey);
-
-  console.log(
-    `🔐 Set conversation public key: conv=${conversationId.slice(0, 8)}... user=${userId}`,
-  );
+  await ChatKeyService.setConversationPublicKey({
+    conversationId,
+    userId,
+    userType,
+    publicKey,
+  });
 
   return res
     .status(200)
@@ -158,115 +195,15 @@ export const getConversationPublicKey = asyncHandler(async (req, res) => {
     throw new ApiError(400, "conversationId, userId, userType are required");
   }
 
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-
-  // Try cache first
-  let cachedKey = await cacheService.get(cacheKey);
-  if (cachedKey) {
-    console.log(
-      `📦 Cache hit for conversation public key: conv=${conversationId.slice(0, 8)}...`,
-    );
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(200, { publicKey: cachedKey.publicKey }, "Public key"),
-      );
-  }
-
-  // Query database
-  const key = await ConversationKey.findOne({
+  const publicKey = await ChatKeyService.getConversationPublicKey({
     conversationId,
     userId,
     userType,
   });
 
-  if (!key) {
-    console.warn(
-      `⚠️ Conversation public key not found: conv=${conversationId.slice(0, 8)}... user=${userId}`,
-    );
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, "Conversation public key not found"));
-  }
-
-  console.log(
-    `✅ Found conversation public key from DB: conv=${conversationId.slice(0, 8)}...`,
-  );
-
-  // Cache for 30 minutes
-  const keyData = { publicKey: key.publicKey };
-  await cacheService.set(cacheKey, keyData, 30 * 60);
-
-  return res.status(200).json(new ApiResponse(200, keyData, "Public key"));
-});
-
-// ========== CONVERSATION-BASED KEYPAIR MANAGEMENT (BACKUP) ==========
-// Stores full keypair (public + private) for recovery after logout
-
-export const setConversationKeyPair = asyncHandler(async (req, res) => {
-  const { conversationId } = req.params;
-  const { publicKey, privateKey } = req.body;
-
-  if (!publicKey || !privateKey) {
-    throw new ApiError(400, "publicKey and privateKey are required");
-  }
-
-  const userId = req.admin._id;
-  const userType = "Admin";
-
-  // Upsert the conversation keypair
-  await ConversationKey.findOneAndUpdate(
-    { conversationId, userId, userType },
-    { publicKey, privateKey },
-    { upsert: true, new: true },
-  );
-
-  const cacheKey = `chat:conv:pk:${conversationId}:${userType}:${userId}`;
-  await cacheService.del(cacheKey);
-
-  console.log(
-    `🔐 Backed up conversation keypair: conv=${conversationId.slice(0, 8)}...`,
-  );
-
   return res
     .status(200)
-    .json(new ApiResponse(200, null, "Conversation keypair backed up"));
-});
-
-export const getConversationKeyPair = asyncHandler(async (req, res) => {
-  const { conversationId } = req.params;
-  const userId = req.admin._id;
-  const userType = "Admin";
-
-  const key = await ConversationKey.findOne({
-    conversationId,
-    userId,
-    userType,
-  }).select("publicKey privateKey");
-
-  if (!key?.privateKey) {
-    console.warn(
-      `⚠️ Conversation keypair not found: conv=${conversationId.slice(0, 8)}...`,
-    );
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, "Conversation keypair not found"));
-  }
-
-  console.log(
-    `✅ Retrieved conversation keypair: conv=${conversationId.slice(0, 8)}...`,
-  );
-
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        publicKey: key.publicKey,
-        privateKey: key.privateKey,
-      },
-      "Keypair",
-    ),
-  );
+    .json(new ApiResponse(200, { publicKey }, "Public key"));
 });
 
 // ========== CONVERSATION MANAGEMENT ==========
@@ -368,8 +305,8 @@ export const editMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { text, encryptedPayload } = req.body;
 
-  if (!text || !encryptedPayload) {
-    throw new ApiError(400, "text and encryptedPayload are required");
+  if (!encryptedPayload) {
+    throw new ApiError(400, "encryptedPayload is required");
   }
 
   const message = await ChatMessage.findById(messageId);
@@ -382,21 +319,36 @@ export const editMessage = asyncHandler(async (req, res) => {
     throw new ApiError(403, "Not authorized to edit this message");
   }
 
+  ChatEncryptionService.validateEncryptedPayload(
+    encryptedPayload,
+    "Edited message",
+  );
+
   // Update message
-  message.text = text;
+  const previousRecipient = message.encryptedForRecipient;
+  const previousSender = message.encryptedForSender;
+
+  if (text) {
+    message.text = text;
+  }
+
   message.encryptedForRecipient = encryptedPayload;
+  message.encryptedForSender = encryptedPayload;
   message.editedAt = new Date();
   if (!message.editHistory) {
     message.editHistory = [];
   }
   message.editHistory.push({
-    text: message.text,
     editedAt: new Date(),
+    encryptedForRecipient: previousRecipient,
+    encryptedForSender: previousSender,
   });
 
   await message.save();
 
-  return res.status(200).json(new ApiResponse(200, message, "Message edited"));
+  const payload = ChatEncryptionService.unwrapAtRestMessage(message);
+
+  return res.status(200).json(new ApiResponse(200, payload, "Message edited"));
 });
 
 // ✅ Delete message
@@ -433,6 +385,15 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Message not found");
   }
 
+  if (!encryptedPayload) {
+    throw new ApiError(400, "Message must be re-encrypted for new recipient");
+  }
+
+  ChatEncryptionService.validateEncryptedPayload(
+    encryptedPayload,
+    "Forwarded message",
+  );
+
   // Create new message with forwardedFrom reference
   const newMessage = new ChatMessage({
     conversationId: originalMessage.conversationId,
@@ -441,9 +402,8 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     recipientId: originalMessage.recipientId,
     recipientType: originalMessage.recipientType,
     text: text || originalMessage.text,
-    encryptedForRecipient:
-      encryptedPayload || originalMessage.encryptedForRecipient,
-    encryptedForSender: encryptedPayload || originalMessage.encryptedForSender,
+    encryptedForRecipient: encryptedPayload,
+    encryptedForSender: encryptedPayload,
     forwardedFrom: messageId,
     contentType: originalMessage.contentType || "TEXT",
     status: "SENT",
@@ -451,7 +411,9 @@ export const forwardMessage = asyncHandler(async (req, res) => {
 
   await newMessage.save();
 
+  const payload = ChatEncryptionService.unwrapAtRestMessage(newMessage);
+
   return res
     .status(201)
-    .json(new ApiResponse(201, newMessage, "Message forwarded"));
+    .json(new ApiResponse(201, payload, "Message forwarded"));
 });

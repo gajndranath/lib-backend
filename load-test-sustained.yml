@@ -1,0 +1,69 @@
+config:
+  target: "http://localhost:8000"
+  phases:
+    - duration: 300
+      arrivalRate: 30
+      name: "Warm-up - 30 users for 5 minutes"
+    - duration: 1800
+      arrivalRate: 30
+      name: "Sustained load - 30 users for 30 minutes (memory leak detection)"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+  variables:
+    adminEmail: "superadmin@library.com"
+    adminPassword: "admin123"
+
+scenarios:
+  - name: "Continuous API Operations"
+    flow:
+      - post:
+          url: "/api/v1/admin/login"
+          json:
+            email: "{{ adminEmail }}"
+            password: "{{ adminPassword }}"
+          capture:
+            json: "$.data.accessToken"
+            as: "token"
+
+      # Database heavy operations
+      - think: 1
+      - get:
+          url: "/api/v1/students?page=1&limit=50"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      - think: 2
+      - get:
+          url: "/api/v1/slots"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      # Cache-benefiting operations (repeated access)
+      - think: 1
+      - get:
+          url: "/api/v1/admin/profile"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      - think: 1
+      - get:
+          url: "/api/v1/admin/profile"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      - think: 1
+      - get:
+          url: "/api/v1/admin/profile"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      # Announcements and notifications
+      - think: 2
+      - get:
+          url: "/api/v1/announcements"
+          headers:
+            Authorization: "Bearer {{ token }}"
+
+      # Repeat cycle
+      - think: 3

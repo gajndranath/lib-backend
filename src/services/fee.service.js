@@ -1,196 +1,191 @@
-import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
-import { AdvanceBalance } from "../models/advanceBalance.model.js";
-import { DueRecord } from "../models/dueRecord.model.js";
+/**
+ * Fee Service - Main Facade
+ * Delegates to focused fee services for better maintainability
+ *
+ * This service acts as a facade pattern, providing backward compatibility
+ * while internally using specialized services:
+ * - FeeGenerationService: Fee creation and billing cycles
+ * - FeePaymentService: Payment recording and receipts
+ * - FeeAdvanceService: Advance payments management
+ * - FeeDueService: Due tracking and reminders
+ */
+
+import FeeGenerationService from "./feeGeneration.service.js";
+import FeePaymentService from "./feePayment.service.js";
+import FeeAdvanceService from "./feeAdvance.service.js";
+import FeeDueService from "./feeDue.service.js";
 import { Student } from "../models/student.model.js";
+import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
+import { DueRecord } from "../models/dueRecord.model.js";
+import { AdvanceBalance } from "../models/advanceBalance.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { Reminder } from "../models/reminder.model.js";
-import { ApiError } from "../utils/ApiError.js";
-import { PAYMENT_GRACE_PERIOD, ReminderType } from "../constants/constants.js";
+import { ReminderType } from "../constants/constants.js";
 
 class FeeService {
+  // ========================================
+  // FEE GENERATION METHODS
+  // ========================================
+  // ========================================
+  // FEE GENERATION METHODS
+  // ========================================
+
   /**
    * Generate monthly fee record for all active students
+   * @deprecated Use FeeGenerationService.generateMonthlyFees instead
    */
   static async generateMonthlyFees(month, year, adminId) {
-    const activeStudents = await Student.find({
-      status: "ACTIVE",
-      isDeleted: false,
-    });
-
-    const results = {
-      generated: 0,
-      skipped: 0,
-      errors: [],
-    };
-
-    for (const student of activeStudents) {
-      try {
-        // Check if fee record already exists
-        const existingFee = await StudentMonthlyFee.findOne({
-          studentId: student._id,
-          month,
-          year,
-        });
-
-        if (existingFee) {
-          results.skipped++;
-          continue;
-        }
-
-        // Calculate due carry forward
-        const previousMonth = month === 0 ? 11 : month - 1;
-        const previousYear = month === 0 ? year - 1 : year;
-
-        const previousFee = await StudentMonthlyFee.findOne({
-          studentId: student._id,
-          month: previousMonth,
-          year: previousYear,
-        });
-
-        let dueCarriedForward = 0;
-        if (previousFee && previousFee.status === "DUE") {
-          dueCarriedForward =
-            previousFee.baseFee + previousFee.dueCarriedForwardAmount;
-        }
-
-        // Create monthly fee record
-        const monthlyFee = await StudentMonthlyFee.create({
-          studentId: student._id,
-          month,
-          year,
-          baseFee: student.monthlyFee,
-          dueCarriedForwardAmount: dueCarriedForward,
-          status: "PENDING",
-          createdBy: adminId,
-        });
-
-        // Check if advance covers this month
-        const advanceBalance = await AdvanceBalance.findOne({
-          studentId: student._id,
-        });
-
-        if (
-          advanceBalance &&
-          advanceBalance.remainingAmount >= monthlyFee.totalAmount
-        ) {
-          await this.applyAdvanceToMonth(student._id, month, year, adminId);
-        }
-
-        results.generated++;
-      } catch (error) {
-        results.errors.push({
-          student: student.name,
-          error: error.message,
-        });
-      }
-    }
-
-    // Log the action
-    await AdminActionLog.create({
-      adminId,
-      action: "GENERATE_MONTHLY_FEES",
-      targetEntity: "SYSTEM",
-      targetId: adminId,
-      newValue: { month, year, results },
-      ipAddress: "SYSTEM",
-      userAgent: "SYSTEM",
-    });
-
-    return results;
+    return FeeGenerationService.generateMonthlyFees(month, year, adminId);
   }
 
-  /**
-   * Mark fee as paid
-   */
   /**
    * Ensure monthly fee record exists, create if not found
    */
   static async ensureMonthlyFeeExists(studentId, month, year, adminId) {
-    let monthlyFee = await StudentMonthlyFee.findOne({
+    return FeeGenerationService.ensureMonthlyFeeExists(
       studentId,
       month,
       year,
-    });
-
-    if (!monthlyFee) {
-      // Check if student exists and is active
-      const student = await Student.findById(studentId);
-      if (!student) {
-        throw new ApiError(404, "Student not found");
-      }
-
-      // Calculate due carry forward from previous month
-      const previousMonth = month === 0 ? 11 : month - 1;
-      const previousYear = month === 0 ? year - 1 : year;
-
-      const previousFee = await StudentMonthlyFee.findOne({
-        studentId,
-        month: previousMonth,
-        year: previousYear,
-      });
-
-      let dueCarriedForward = 0;
-
-      // Carry forward if previous month has unpaid dues
-      if (previousFee) {
-        if (previousFee.status === "DUE") {
-          // Full unpaid month
-          dueCarriedForward =
-            previousFee.baseFee + previousFee.dueCarriedForwardAmount;
-        } else if (previousFee.status === "PAID" && previousFee.paidAmount) {
-          // Partial payment - carry forward the unpaid portion
-          const unpaidAmount =
-            Math.round(
-              (previousFee.totalAmount - previousFee.paidAmount) * 100,
-            ) / 100;
-          if (unpaidAmount > 0) {
-            dueCarriedForward = unpaidAmount;
-          }
-        }
-      }
-
-      // Also check for unresolved due records to ensure cumulative tracking
-      const unresolvedDue = await DueRecord.findOne({
-        studentId,
-        resolved: false,
-      });
-
-      if (unresolvedDue && unresolvedDue.totalDueAmount > 0) {
-        // Add any additional unresolved dues
-        dueCarriedForward =
-          Math.round((dueCarriedForward + unresolvedDue.totalDueAmount) * 100) /
-          100;
-      }
-
-      // Create monthly fee record
-      monthlyFee = await StudentMonthlyFee.create({
-        studentId,
-        month,
-        year,
-        baseFee: student.monthlyFee,
-        dueCarriedForwardAmount: dueCarriedForward,
-        status: "PENDING",
-        createdBy: adminId,
-      });
-
-      // Check if advance covers this month
-      const advanceBalance = await AdvanceBalance.findOne({
-        studentId,
-      });
-
-      if (
-        advanceBalance &&
-        advanceBalance.remainingAmount >= monthlyFee.totalAmount
-      ) {
-        await this.applyAdvanceToMonth(studentId, month, year, adminId);
-        monthlyFee = await StudentMonthlyFee.findById(monthlyFee._id);
-      }
-    }
-
-    return monthlyFee;
+      adminId,
+    );
   }
 
+  /**
+   * Generate personalized fees based on individual billing cycles
+   */
+  static async generatePersonalizedFees(adminId = null) {
+    return FeeGenerationService.generatePersonalizedFees(adminId);
+  }
+
+  /**
+   * Get students with overdue payments
+   */
+  static async getStudentsWithOverduePayments(graceDays = 1) {
+    return FeeGenerationService.getStudentsWithOverduePayments(graceDays);
+  }
+
+  /**
+   * Auto-mark pending fees as DUE after grace period
+   */
+  static async autoMarkOverdueAsDue(graceDays = 1, adminId = null) {
+    return FeeGenerationService.autoMarkOverdueAsDue(graceDays, adminId);
+  }
+
+  // ========================================
+  // FEE PAYMENT METHODS
+  // ========================================
+
+  /**
+   * Mark fee as paid
+   */
   static async markAsPaid(studentId, month, year, paymentData, adminId) {
+    return FeePaymentService.markAsPaid(
+      studentId,
+      month,
+      year,
+      paymentData,
+      adminId,
+    );
+  }
+
+  /**
+   * Get student fee summary
+   */
+  static async getStudentFeeSummary(studentId) {
+    return FeePaymentService.getStudentFeeSummary(studentId);
+  }
+
+  /**
+   * Get dashboard payment status
+   */
+  static async getDashboardPaymentStatus(month, year) {
+    return FeePaymentService.getDashboardPaymentStatus(month, year);
+  }
+
+  /**
+   * Generate receipt
+   */
+  static async generateReceipt(studentId, month, year) {
+    return FeePaymentService.generateReceipt(studentId, month, year);
+  }
+
+  // ========================================
+  // FEE ADVANCE METHODS
+  // ========================================
+
+  /**
+   * Add advance payment
+   */
+  static async addAdvance(studentId, amount, adminId) {
+    return FeeAdvanceService.addAdvance(studentId, amount, adminId);
+  }
+
+  /**
+   * Apply advance to a specific month
+   */
+  static async applyAdvanceToMonth(studentId, month, year, adminId) {
+    return FeeAdvanceService.applyAdvanceToMonth(
+      studentId,
+      month,
+      year,
+      adminId,
+    );
+  }
+
+  /**
+   * Get advance balance
+   */
+  static async getAdvanceBalance(studentId) {
+    return FeeAdvanceService.getAdvanceBalance(studentId);
+  }
+
+  /**
+   * Get advance usage history
+   */
+  static async getAdvanceUsageHistory(studentId) {
+    return FeeAdvanceService.getAdvanceUsageHistory(studentId);
+  }
+
+  // ========================================
+  // FEE DUE METHODS
+  // ========================================
+
+  /**
+   * Mark fee as due
+   */
+  static async markAsDue(studentId, month, year, reminderDate, adminId) {
+    return FeeDueService.markAsDue(
+      studentId,
+      month,
+      year,
+      reminderDate,
+      adminId,
+    );
+  }
+
+  /**
+   * Get student due records
+   */
+  static async getStudentDueRecords(studentId) {
+    return FeeDueService.getStudentDueRecords(studentId);
+  }
+
+  /**
+   * Get current unresolved due record
+   */
+  static async getCurrentDueRecord(studentId) {
+    return FeeDueService.getCurrentDueRecord(studentId);
+  }
+
+  // ========================================
+  // DEPRECATED METHODS (kept for backward compatibility)
+  // Will be removed in future versions
+  // ========================================
+
+  /**
+   * @deprecated This method contains old payment logic
+   */
+  static async _oldMarkAsPaid(studentId, month, year, paymentData, adminId) {
     // Ensure the fee record exists, create if not found
     let monthlyFee = await this.ensureMonthlyFeeExists(
       studentId,
@@ -550,44 +545,7 @@ class FeeService {
    * Calculate payment status for dashboard
    */
   static async getDashboardPaymentStatus(month, year) {
-    const monthlyFees = await StudentMonthlyFee.find({
-      month,
-      year,
-    }).populate("studentId", "name status");
-
-    const stats = {
-      total: monthlyFees.length,
-      paid: monthlyFees.filter((f) => f.status === "PAID").length,
-      due: monthlyFees.filter((f) => f.status === "DUE").length,
-      pending: monthlyFees.filter((f) => f.status === "PENDING").length,
-      totalAmount: monthlyFees.reduce((sum, f) => sum + f.totalAmount, 0),
-      paidAmount: monthlyFees
-        .filter((f) => f.status === "PAID")
-        .reduce((sum, f) => sum + f.totalAmount, 0),
-      dueAmount: monthlyFees
-        .filter((f) => f.status === "DUE")
-        .reduce((sum, f) => sum + f.totalAmount, 0),
-      pendingAmount: monthlyFees
-        .filter((f) => f.status === "PENDING")
-        .reduce((sum, f) => sum + f.totalAmount, 0),
-    };
-
-    const details = monthlyFees.map((fee) => ({
-      studentId: fee.studentId._id,
-      studentName: fee.studentId.name,
-      studentStatus: fee.studentId.status,
-      month: fee.month,
-      year: fee.year,
-      baseFee: fee.baseFee,
-      dueCarriedForward: fee.dueCarriedForwardAmount,
-      totalAmount: fee.totalAmount,
-      status: fee.status,
-      coveredByAdvance: fee.coveredByAdvance,
-      locked: fee.locked,
-      paymentDate: fee.paymentDate,
-    }));
-
-    return { stats, details };
+    return FeePaymentService.getDashboardPaymentStatus(month, year);
   }
 
   /**
@@ -879,159 +837,6 @@ class FeeService {
     }
 
     return results;
-  }
-
-  /**
-   * Generate receipt for a paid fee
-   */
-  static async generateReceipt(studentId, month, year) {
-    const monthlyFee = await StudentMonthlyFee.findOne({
-      studentId,
-      month,
-      year,
-    }).populate("studentId", "name phoneNumber email");
-
-    if (!monthlyFee) {
-      throw new ApiError(404, "Fee record not found");
-    }
-
-    if (monthlyFee.status !== "PAID") {
-      throw new ApiError(400, "Receipt can only be generated for paid fees");
-    }
-
-    const monthNames = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-    ];
-
-    const receiptNumber = `RCP-${monthlyFee._id
-      .toString()
-      .slice(-8)
-      .toUpperCase()}`;
-    const monthYear = `${monthNames[month]} ${year}`;
-
-    return {
-      receiptNumber,
-      studentName: monthlyFee.studentId.name,
-      studentPhone: monthlyFee.studentId.phoneNumber,
-      monthYear,
-      amount: monthlyFee.paidAmount || monthlyFee.totalAmount,
-      paymentDate: monthlyFee.paymentDate,
-      paymentMethod: monthlyFee.paymentMethod || "Not specified",
-      transactionId: monthlyFee.transactionId || null,
-      remarks: monthlyFee.remarks || null,
-    };
-  }
-
-  /**
-   * Get receipt HTML for PDF generation
-   */
-  static async getReceiptHTML(studentId, month, year) {
-    const receipt = await this.generateReceipt(studentId, month, year);
-
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          .receipt { max-width: 600px; border: 1px solid #ddd; padding: 20px; }
-          .header { text-align: center; margin-bottom: 30px; }
-          .header h2 { margin: 0; color: #333; }
-          .receipt-number { text-align: center; color: #666; margin-bottom: 20px; }
-          .section { margin-bottom: 20px; }
-          .section-title { font-weight: bold; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
-          .row { display: flex; justify-content: space-between; margin: 10px 0; }
-          .label { font-weight: 500; color: #666; }
-          .value { text-align: right; }
-          .total { border-top: 2px solid #333; padding-top: 10px; font-size: 16px; font-weight: bold; }
-          .footer { text-align: center; color: #999; margin-top: 30px; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="receipt">
-          <div class="header">
-            <h2>Payment Receipt</h2>
-            <p style="margin: 5px 0; color: #666;">Library System</p>
-          </div>
-          
-          <div class="receipt-number">
-            Receipt #: ${receipt.receiptNumber}
-          </div>
-          
-          <div class="section">
-            <div class="section-title">Student Information</div>
-            <div class="row">
-              <span class="label">Name:</span>
-              <span class="value">${receipt.studentName}</span>
-            </div>
-            <div class="row">
-              <span class="label">Phone:</span>
-              <span class="value">${receipt.studentPhone}</span>
-            </div>
-          </div>
-          
-          <div class="section">
-            <div class="section-title">Payment Details</div>
-            <div class="row">
-              <span class="label">Month:</span>
-              <span class="value">${receipt.monthYear}</span>
-            </div>
-            <div class="row">
-              <span class="label">Amount:</span>
-              <span class="value">₹${receipt.amount.toFixed(2)}</span>
-            </div>
-            <div class="row">
-              <span class="label">Payment Date:</span>
-              <span class="value">${new Date(receipt.paymentDate).toLocaleDateString()}</span>
-            </div>
-            <div class="row">
-              <span class="label">Payment Method:</span>
-              <span class="value">${receipt.paymentMethod}</span>
-            </div>
-            ${
-              receipt.transactionId
-                ? `
-            <div class="row">
-              <span class="label">Transaction ID:</span>
-              <span class="value">${receipt.transactionId}</span>
-            </div>
-            `
-                : ""
-            }
-            ${
-              receipt.remarks
-                ? `
-            <div class="row">
-              <span class="label">Remarks:</span>
-              <span class="value">${receipt.remarks}</span>
-            </div>
-            `
-                : ""
-            }
-          </div>
-          
-          <div class="footer">
-            <p>This is a computer-generated receipt. No signature required.</p>
-            <p>Generated on: ${new Date().toLocaleString()}</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    return html;
   }
 }
 

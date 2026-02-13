@@ -58,7 +58,7 @@ const studentSchema = new Schema(
     slotId: {
       type: Schema.Types.ObjectId,
       ref: "Slot",
-      required: true,
+      required: false, // ✅ Optional - assigned by admin later
     },
     seatNumber: {
       type: String,
@@ -68,7 +68,7 @@ const studentSchema = new Schema(
     // Financial
     monthlyFee: {
       type: Number,
-      required: true,
+      default: 0, // ✅ Default to 0 for self-registration
       min: 0,
     },
     feeOverride: {
@@ -80,7 +80,7 @@ const studentSchema = new Schema(
     status: {
       type: String,
       enum: Object.values(StudentStatus),
-      default: StudentStatus.ACTIVE,
+      default: StudentStatus.INACTIVE, // ✅ Default INACTIVE until admin approves
     },
     joiningDate: {
       type: Date,
@@ -91,11 +91,11 @@ const studentSchema = new Schema(
       type: Number,
       min: 1,
       max: 31,
-      required: true,
+      required: false, // ✅ Optional - set when slot assigned
     },
     nextBillingDate: {
       type: Date,
-      required: true,
+      required: false, // ✅ Optional - calculated when slot assigned
     },
     leavingDate: {
       type: Date,
@@ -124,6 +124,13 @@ const studentSchema = new Schema(
     publicKey: {
       type: String,
       trim: true,
+    },
+    previousPublicKey: {
+      type: String,
+      trim: true,
+    },
+    publicKeyRotatedAt: {
+      type: Date,
     },
     encryptedPrivateKey: {
       type: String,
@@ -247,30 +254,6 @@ studentSchema.methods.reactivate = function () {
   this.deletedAt = null;
   return this.save();
 };
-
-// Pre-save hook to validate seat availability
-studentSchema.pre("save", async function () {
-  // Only validate if slotId or status is being modified
-  if (this.isModified("slotId") || this.isModified("status")) {
-    // Only validate for active students
-    if (this.status === "ACTIVE") {
-      const Slot = mongoose.model("Slot");
-      const slot = await Slot.findById(this.slotId);
-
-      if (slot) {
-        const occupiedSeats = await mongoose.model("Student").countDocuments({
-          slotId: this.slotId,
-          status: "ACTIVE",
-          _id: { $ne: this._id },
-        });
-
-        if (occupiedSeats >= slot.totalSeats) {
-          throw new Error(`Slot "${slot.name}" is full. No seats available.`);
-        }
-      }
-    }
-  }
-});
 
 // Performance Indexes for common queries
 // Composite index for slot capacity checks

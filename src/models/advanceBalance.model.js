@@ -42,7 +42,7 @@ const advanceBalanceSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Method to add advance
@@ -65,7 +65,7 @@ advanceBalanceSchema.methods.applyToMonth = function (month, year, amount) {
 
   if (amount > this.remainingAmount) {
     throw new Error(
-      `Insufficient advance balance. Required: ${amount}, Available: ${this.remainingAmount}`
+      `Insufficient advance balance. Required: ${amount}, Available: ${this.remainingAmount}`,
     );
   }
 
@@ -76,7 +76,10 @@ advanceBalanceSchema.methods.applyToMonth = function (month, year, amount) {
   return this.save();
 };
 
+// Compound indexes for common queries
+advanceBalanceSchema.index({ studentId: 1, remainingAmount: 1 });
+
 export const AdvanceBalance = mongoose.model(
   "AdvanceBalance",
-  advanceBalanceSchema
+  advanceBalanceSchema,
 );

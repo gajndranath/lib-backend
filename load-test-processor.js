@@ -76,8 +76,4 @@ function onError(error, requestParams, context, ee, next) {
 }
 
 // Export hooks
-module.exports = {
-  beforeRequest,
-  afterResponse,
-  onError,
-};
+export { beforeRequest, afterResponse, onError };

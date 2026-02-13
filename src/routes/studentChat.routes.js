@@ -11,12 +11,13 @@ import {
   getPublicKey,
   setConversationPublicKey,
   getConversationPublicKey,
-  setConversationKeyPair,
-  getConversationKeyPair,
   createOrGetConversation,
   listConversations,
   listMessages,
   sendMessage,
+  editMessage,
+  deleteMessage,
+  forwardMessage,
 } from "../controllers/studentChat.controller.js";
 import {
   sendFriendRequest,
@@ -50,23 +51,16 @@ router
   .route("/conversations/:conversationId/keys/:userType/:userId")
   .get(publicKeyLimiter, getConversationPublicKey);
 
-// ========== CONVERSATION-BASED KEYPAIR ENDPOINTS (BACKUP) ==========
-// Set full keypair (public + private) for recovery after logout
-router
-  .route("/conversations/:conversationId/keypair")
-  .post(setConversationKeyPair);
-
-// Get full keypair (public + private) from server
-router
-  .route("/conversations/:conversationId/keypair")
-  .get(getConversationKeyPair);
-
 router
   .route("/conversations")
   .get(listConversations)
   .post(createOrGetConversation);
 router.route("/conversations/:conversationId/messages").get(listMessages);
 router.route("/messages").post(sendMessage);
+
+// ✅ Message edit, delete, forward - same as admin routes
+router.route("/messages/:messageId").put(editMessage).delete(deleteMessage);
+router.route("/messages/:messageId/forward").post(forwardMessage);
 
 router.route("/friends").get(listFriends);
 router.route("/friends/remove").post(removeFriend);

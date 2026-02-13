@@ -1,57 +1,57 @@
 import { Student } from "../models/student.model.js";
-import { Slot } from "../models/slot.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { ApiError } from "../utils/ApiError.js";
+import cacheService from "../utils/cache.js";
+import { CACHE_KEYS, CACHE_TTL } from "../utils/cacheStrategy.js";
 import FeeService from "./fee.service.js";
+import {
+  generateLibraryId,
+  checkEmailExists,
+  checkPhoneExists,
+} from "../utils/studentHelpers.js";
+import {
+  validateSlotChange,
+  validateSlotHasCapacity,
+} from "../utils/slotHelpers.js";
 
 class StudentService {
   /**
-   * Register new student
+   * Admin creates new student
+   * - Requires slot assignment
+   * - Creates billing immediately
+   * - Status can be ACTIVE
    */
   static async registerStudent(studentData, adminId) {
     try {
-      // Check if phone already exists
-      const existingStudent = await Student.findOne({
-        phone: studentData.phone,
-        isDeleted: false,
-      });
-
-      if (existingStudent) {
-        throw new ApiError(
-          409,
-          "Student with this phone number already exists",
-        );
+      // ✅ Check email uniqueness (if provided)
+      if (studentData.email) {
+        const existingEmail = await checkEmailExists(studentData.email);
+        if (existingEmail) {
+          throw new ApiError(409, "Email already registered");
+        }
       }
 
-      // Verify slot exists and has capacity
-      const slot = await Slot.findById(studentData.slotId);
-      if (!slot) {
-        throw new ApiError(404, "Selected slot not found");
+      // ✅ Check phone uniqueness
+      const existingPhone = await checkPhoneExists(studentData.phone);
+      if (existingPhone) {
+        throw new ApiError(409, "Phone number already registered");
       }
 
-      if (!slot.isActive) {
-        throw new ApiError(400, "Selected slot is not active");
-      }
+      // ✅ Verify slot exists, is active, and has capacity
+      await validateSlotHasCapacity(studentData.slotId);
 
-      // Check slot capacity
-      const occupiedSeats = await Student.countDocuments({
-        slotId: studentData.slotId,
-        status: "ACTIVE",
-      });
+      // ✅ Generate library ID
+      const libraryId = await generateLibraryId();
 
-      if (occupiedSeats >= slot.totalSeats) {
-        throw new ApiError(
-          400,
-          `Slot "${slot.name}" is full. Please select another slot.`,
-        );
-      }
-
-      // Create student
+      // ✅ Create student
       const student = await Student.create({
         ...studentData,
+        libraryId,
         createdBy: adminId,
+        emailVerified: false, // Admin can verify later or student verifies via OTP
       });
-      // Generate initial fee record for current month
+
+      // ✅ Generate initial fee record for current month
       try {
         const currentDate = new Date();
         await FeeService.ensureMonthlyFeeExists(
@@ -60,27 +60,30 @@ class StudentService {
           currentDate.getFullYear(),
           adminId,
         );
+        console.log(`✅ Monthly fee record created for ${student.libraryId}`);
       } catch (feeError) {
+        console.error("❌ Failed to create fee record:", feeError.message);
         // Don't throw - student is already created
       }
 
-      // Log the action
+      // ✅ Log the admin action
       try {
         await AdminActionLog.create({
           adminId,
           action: "CREATE_STUDENT",
           targetEntity: "STUDENT",
           targetId: student._id,
-          newValue: studentData,
-          metadata: { studentId: student._id },
+          newValue: { ...studentData, libraryId },
+          metadata: { studentId: student._id, libraryId },
         });
       } catch (logError) {
-        // Don't throw here - we already created the student
+        console.error("❌ Failed to log admin action:", logError.message);
+        // Don't throw - student is already created
       }
 
       return student;
     } catch (error) {
-      console.error("Error in registerStudent:", error);
+      console.error("❌ Error in registerStudent:", error.message);
       throw error;
     }
   }
@@ -111,7 +114,9 @@ class StudentService {
         phone: updateData.phone,
         isDeleted: false,
         _id: { $ne: studentId },
-      });
+      })
+        .select("_id")
+        .lean();
 
       if (phoneExists) {
         throw new ApiError(
@@ -121,9 +126,23 @@ class StudentService {
       }
     }
 
+    // Validate slot change if slotId is being updated
+    if (
+      updateData.slotId &&
+      updateData.slotId.toString() !== student.slotId?.toString()
+    ) {
+      if (student.slotId) {
+        validateSlotChange(student.slotId, updateData.slotId);
+      }
+      await validateSlotHasCapacity(updateData.slotId);
+    }
+
     // Update student
     Object.assign(student, updateData);
     await student.save();
+
+    // Invalidate student cache
+    await cacheService.del(CACHE_KEYS.STUDENT(studentId));
 
     // Log the action
     await AdminActionLog.create({
@@ -159,6 +178,9 @@ class StudentService {
     // Archive student
     await student.archive(reason);
 
+    // Invalidate student cache
+    await cacheService.del(CACHE_KEYS.STUDENT(studentId));
+
     // Log the action
     await AdminActionLog.create({
       adminId,
@@ -192,20 +214,7 @@ class StudentService {
     }
 
     // Check if slot still has capacity
-    const slot = await Slot.findById(student.slotId);
-    if (slot) {
-      const occupiedSeats = await Student.countDocuments({
-        slotId: student.slotId,
-        status: "ACTIVE",
-      });
-
-      if (occupiedSeats >= slot.totalSeats) {
-        throw new ApiError(
-          400,
-          `Slot "${slot.name}" is full. Cannot reactivate student.`,
-        );
-      }
-    }
+    await validateSlotHasCapacity(student.slotId);
 
     // Reactivate
     await student.reactivate();
@@ -228,22 +237,32 @@ class StudentService {
    * Get student with complete details
    */
   static async getStudentDetails(studentId) {
-    const student = await Student.findById(studentId).populate(
-      "slotId",
-      "name timeRange monthlyFee",
+    const cacheKey = CACHE_KEYS.STUDENT(studentId);
+
+    const result = await cacheService.getOrSet(
+      cacheKey,
+      async () => {
+        const student = await Student.findById(studentId).populate(
+          "slotId",
+          "name timeRange monthlyFee",
+        );
+
+        if (!student) {
+          throw new ApiError(404, "Student not found");
+        }
+
+        // Get fee summary
+        const feeSummary = await FeeService.getStudentFeeSummary(studentId);
+
+        return {
+          student: student.toObject(),
+          feeSummary,
+        };
+      },
+      CACHE_TTL.STUDENT_PROFILE,
     );
 
-    if (!student) {
-      throw new ApiError(404, "Student not found");
-    }
-
-    // Get fee summary
-    const feeSummary = await FeeService.getStudentFeeSummary(studentId);
-
-    return {
-      student: student.toObject(),
-      feeSummary,
-    };
+    return result;
   }
 
   /**

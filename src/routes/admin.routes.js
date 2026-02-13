@@ -12,6 +12,7 @@ import {
   deleteAdmin,
   getAuditLogs,
 } from "../controllers/admin.controller.js";
+import AdminService from "../services/admin.service.js";
 import { verifyJWT, authorizeRoles } from "../middlewares/auth.middleware.js";
 import {
   apiLimiter,
@@ -23,6 +24,15 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const router = Router();
+// Student-accessible route: List all admins (no SUPER_ADMIN restriction)
+router.route("/list").get(
+  asyncHandler(async (req, res) => {
+    const admins = await AdminService.getAllAdmins();
+    return res
+      .status(200)
+      .json(new ApiResponse(200, admins, "Admins list fetched"));
+  }),
+);
 
 // Public Routes
 router.route("/login").post(authLimiter, loginAdmin);

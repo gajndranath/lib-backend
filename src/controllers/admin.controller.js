@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Admin } from "../models/admin.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
+import AdminService from "../services/admin.service.js";
 import { z } from "zod";
 
 // Zod validation schema with stricter rules
@@ -80,8 +81,7 @@ const loginAdmin = asyncHandler(async (req, res) => {
 
 // MISSING FUNCTION: Get Admin Profile - ADD THIS
 const getAdminProfile = asyncHandler(async (req, res) => {
-  const admin = await Admin.findById(req.admin._id).select("-password");
-  if (!admin) throw new ApiError(404, "Admin not found");
+  const admin = await AdminService.getAdminProfile(req.admin._id);
 
   return res
     .status(200)
@@ -92,13 +92,9 @@ const getAdminProfile = asyncHandler(async (req, res) => {
 const updateNotificationPreferences = asyncHandler(async (req, res) => {
   const { preferences } = req.body;
 
-  const admin = await Admin.findByIdAndUpdate(
-    req.admin._id,
-    { notificationPreferences: preferences },
-    { new: true },
-  ).select("-password");
-
-  if (!admin) throw new ApiError(404, "Admin not found");
+  const admin = await AdminService.updateAdminProfile(req.admin._id, {
+    notificationPreferences: preferences,
+  });
 
   return res
     .status(200)
@@ -135,26 +131,20 @@ const registerAdmin = asyncHandler(async (req, res) => {
     }
   }
 
-  // 3. Create new admin
-  const admin = await Admin.create({
-    username,
-    email,
-    password,
-    role: role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "STAFF",
-    isActive: true,
-  });
-
-  // 4. Remove password from response
-  const createdAdmin = await Admin.findById(admin._id).select("-password");
+  // 3. Create new admin via service
+  const admin = await AdminService.createAdmin(
+    { username, email, password, role },
+    req.admin._id,
+  );
 
   return res
     .status(201)
-    .json(new ApiResponse(201, createdAdmin, "Admin registered successfully"));
+    .json(new ApiResponse(201, admin, "Admin registered successfully"));
 });
 
 // NEW FUNCTION: Get all admins
 const getAllAdmins = asyncHandler(async (req, res) => {
-  const admins = await Admin.find({}).select("-password -refreshToken");
+  const admins = await AdminService.getAllAdmins();
 
   return res
     .status(200)
@@ -175,13 +165,11 @@ const updateAdmin = asyncHandler(async (req, res) => {
   if (role) updateData.role = role;
   if (isActive !== undefined) updateData.isActive = isActive;
 
-  const admin = await Admin.findByIdAndUpdate(adminId, updateData, {
-    new: true,
-  }).select("-password");
-
-  if (!admin) {
-    throw new ApiError(404, "Admin not found");
-  }
+  const admin = await AdminService.updateAdmin(
+    adminId,
+    updateData,
+    req.admin._id,
+  );
 
   return res
     .status(200)
@@ -212,13 +200,10 @@ const updateOwnProfile = asyncHandler(async (req, res) => {
     }
   }
 
-  const admin = await Admin.findByIdAndUpdate(req.admin._id, updateData, {
-    new: true,
-  }).select("-password -refreshToken");
-
-  if (!admin) {
-    throw new ApiError(404, "Admin not found");
-  }
+  const admin = await AdminService.updateAdminProfile(
+    req.admin._id,
+    updateData,
+  );
 
   return res
     .status(200)
@@ -237,18 +222,11 @@ const changePassword = asyncHandler(async (req, res) => {
     throw new ApiError(400, "New password must be at least 8 characters");
   }
 
-  const admin = await Admin.findById(req.admin._id);
-  if (!admin) {
-    throw new ApiError(404, "Admin not found");
-  }
-
-  const isPasswordValid = await admin.isPasswordCorrect(currentPassword);
-  if (!isPasswordValid) {
-    throw new ApiError(401, "Current password is incorrect");
-  }
-
-  admin.password = newPassword;
-  await admin.save();
+  await AdminService.changePassword(
+    req.admin._id,
+    currentPassword,
+    newPassword,
+  );
 
   return res
     .status(200)
@@ -264,7 +242,7 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Cannot delete your own account");
   }
 
-  const admin = await Admin.findByIdAndDelete(adminId);
+  const admin = await AdminService.deleteAdmin(adminId, req.admin._id);
 
   if (!admin) {
     throw new ApiError(404, "Admin not found");
@@ -296,57 +274,24 @@ const getAuditLogs = asyncHandler(async (req, res) => {
   const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
   const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
-  const filter = {};
+  const filters = {};
 
   if (action && action !== "all") {
-    if (["CREATE", "UPDATE", "DELETE"].includes(action)) {
-      filter.action = { $regex: `^${action}`, $options: "i" };
-    } else {
-      filter.action = action;
-    }
+    filters.action = action;
   }
 
-  if (search) {
-    const searchRegex = new RegExp(search, "i");
-    filter.$or = [
-      { action: searchRegex },
-      { targetEntity: searchRegex },
-      { ipAddress: searchRegex },
-    ];
-  }
-
-  const totalLogs = await AdminActionLog.countDocuments(filter);
-  const logs = await AdminActionLog.find(filter)
-    .sort({ createdAt: -1 })
-    .skip((parsedPage - 1) * parsedLimit)
-    .limit(parsedLimit)
-    .populate("adminId", "username email");
-
-  const mapped = logs.map((log) => ({
-    _id: log._id,
-    admin: log.adminId
-      ? {
-          _id: log.adminId._id,
-          username: log.adminId.username,
-          email: log.adminId.email,
-        }
-      : { _id: null, username: "System", email: "" },
-    action: log.action,
-    target: log.targetEntity,
-    targetId: log.targetId,
-    changes: { before: log.oldValue ?? {}, after: log.newValue ?? {} },
-    ipAddress: log.ipAddress,
-    userAgent: log.userAgent,
-    timestamp: log.createdAt,
-  }));
+  const result = await AdminService.getActionLogs(
+    filters,
+    parsedPage,
+    parsedLimit,
+  );
 
   return res.status(200).json(
     new ApiResponse(
       200,
       {
-        logs: mapped,
-        totalLogs,
-        totalPages: Math.max(Math.ceil(totalLogs / parsedLimit), 1),
+        logs: result.data,
+        pagination: result.pagination,
       },
       "Audit logs fetched",
     ),

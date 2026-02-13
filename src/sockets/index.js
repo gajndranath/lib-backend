@@ -1,9 +1,26 @@
-import { UserRoles } from "../constants/constants.js";
+import jwt from "jsonwebtoken";
 import Notification from "../models/notification.model.js";
 import ChatService from "../services/chat.service.js";
 import NotificationService from "../services/notification.service.js";
 import { CallSession } from "../models/callSession.model.js";
+import { ChatConversation } from "../models/chatConversation.model.js";
 import { getRedisClient } from "../config/redis.js";
+import logger from "../utils/logger.js";
+import { registerChatHandlers } from "./handlers/chat.handlers.js";
+import { registerCallHandlers } from "./handlers/call.handlers.js";
+import { registerPaymentHandlers } from "./handlers/payment.handlers.js";
+import { registerNotificationHandlers } from "./handlers/notification.handlers.js";
+import { registerPresenceHandlers } from "./handlers/presence.handlers.js";
+import { registerBootstrapHandlers } from "./handlers/bootstrap.handlers.js";
+import { registerKeepAliveHandlers } from "./handlers/keepalive.handlers.js";
+import { registerDisconnectHandlers } from "./handlers/disconnect.handlers.js";
+import { registerSystemStatusHandlers } from "./handlers/systemStatus.handlers.js";
+import {
+  createCallRateLimiter,
+  createPayloadValidator,
+  createTypingThrottle,
+  isValidIceCandidate,
+} from "./socket.utils.js";
 
 /**
  * 🔒 MEMORY-SAFE SOCKET HANDLERS - ALL 10 RULES APPLIED
@@ -23,7 +40,19 @@ import { getRedisClient } from "../config/redis.js";
 const redisClient = getRedisClient();
 const MAX_PAYLOAD_SIZE = 20 * 1024; // 20KB limit
 const socketTimers = new Map(); // Track timers per socket
-const socketListeners = new Map(); // Track listener count
+
+const TYPING_THROTTLE_MS = 1000;
+
+// Call rate limiting (per user per minute)
+const CALL_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_CALLS_PER_WINDOW = 10;
+
+const validatePayload = createPayloadValidator(logger, MAX_PAYLOAD_SIZE);
+const checkCallRateLimit = createCallRateLimiter(
+  CALL_LIMIT_WINDOW_MS,
+  MAX_CALLS_PER_WINDOW,
+);
+const canEmitTyping = createTypingThrottle(TYPING_THROTTLE_MS);
 
 // Store io instance for external access
 let ioInstance = null;
@@ -55,7 +84,10 @@ const setPresenceRedis = async (userType, userId, online) => {
       await redisClient.setEx(key, 300, JSON.stringify(payload));
     }
   } catch (err) {
-    console.error("❌ Redis presence error:", err);
+    logger.error("Redis presence error", {
+      error: err.message,
+      stack: err.stack,
+    });
   }
 
   return payload;
@@ -68,7 +100,10 @@ const removePresenceRedis = async (userType, userId) => {
   try {
     await redisClient.del(`presence:${userType}:${userId}`);
   } catch (err) {
-    console.error("❌ Redis delete error:", err);
+    logger.error("Redis delete error", {
+      error: err.message,
+      stack: err.stack,
+    });
   }
 };
 
@@ -90,16 +125,6 @@ const clearSocketTimers = (socketId) => {
   socketTimers.delete(socketId);
 };
 
-// ✅ RULE 6: Validate payload size
-const validatePayload = (payload, maxSize = MAX_PAYLOAD_SIZE) => {
-  const size = JSON.stringify(payload).length;
-  if (size > maxSize) {
-    console.warn(`⚠️ Payload ${size} bytes exceeds max ${maxSize} bytes`);
-    return false;
-  }
-  return true;
-};
-
 // ✅ RULE 5: Clean WebRTC data
 const cleanupCall = async (callId, socketId) => {
   try {
@@ -117,7 +142,7 @@ const cleanupCall = async (callId, socketId) => {
     // Clear timers for this call
     clearSocketTimers(socketId);
   } catch (err) {
-    console.error("❌ Cleanup error:", err);
+    logger.error("Cleanup error", { error: err.message, stack: err.stack });
   }
 };
 
@@ -129,15 +154,42 @@ export const socketHandlers = (io) => {
   const appIntervals = [];
 
   io.on("connection", async (socket) => {
-    console.log(`✅ Socket connected: ${socket.id}`);
+    logger.info("Socket connected", { socketId: socket.id });
 
-    const { adminId, studentId, role } = socket.handshake.auth;
-    const userId = adminId || studentId;
-    const userType = adminId ? "Admin" : "Student";
+    // Accept token in handshake
+    const { token } = socket.handshake.auth;
+    let userId = null;
+    let userType = null;
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+        // Accept both userType and role for admin/student
+        const userTypeField = decoded.userType || decoded.role;
+        if (userTypeField === "STUDENT" || userTypeField === "Student") {
+          userId = decoded._id;
+          userType = "Student";
+        } else if (
+          userTypeField === "ADMIN" ||
+          userTypeField === "Admin" ||
+          userTypeField === "SUPER_ADMIN"
+        ) {
+          userId = decoded._id;
+          userType = "Admin";
+        }
+      } catch (err) {
+        logger.error("Socket JWT error", {
+          error: err.message,
+          socketId: socket.id,
+        });
+      }
+    }
 
     // ✅ RULE 6: Validate auth data
     if (!userId || !userType) {
-      console.error("❌ Auth missing");
+      logger.error("Auth missing in socket handshake", {
+        socketId: socket.id,
+        handshakeAuth: socket.handshake.auth,
+      });
       socket.disconnect(true);
       return;
     }
@@ -145,8 +197,8 @@ export const socketHandlers = (io) => {
     try {
       // Join rooms
       socket.join(`${userType.toLowerCase()}_${userId}`);
-      if (adminId) socket.join("admins");
-      if (studentId) socket.join("students");
+      if (userType === "Admin") socket.join("admins");
+      if (userType === "Student") socket.join("students");
 
       socket.emit("connected", {
         success: true,
@@ -154,457 +206,109 @@ export const socketHandlers = (io) => {
         timestamp: new Date(),
       });
 
-      // ✅ RULE 1 & 9: Set presence in Redis (not memory)
-      await setPresenceRedis(userType, userId, true);
-
-      // Fetch notifications (limited)
-      Notification.find({
+      const baseContext = {
+        io,
+        socket,
         userId,
         userType,
-        read: false,
-        delivered: false,
-      })
-        .sort({ createdAt: -1 })
-        .limit(10) // ✅ Limited
-        .then((notifications) => {
-          notifications.forEach((n) => {
-            socket.emit("notification", n);
-            n.markAsDelivered("IN_APP", "DELIVERED").catch(() => {});
-          });
-        })
-        .catch((err) => console.error("Notification fetch error:", err));
+        logger,
+      };
 
-      // ========== PAYMENT EVENTS ==========
+      const serviceContext = {
+        Notification,
+        NotificationService,
+        ChatService,
+        CallSession,
+        ChatConversation,
+        redisClient,
+      };
 
-      socket.on("payment_updated", (data) => {
-        if (!validatePayload(data)) return;
-        io.to("admins").emit("payment_sync", {
-          ...data,
-          timestamp: new Date(),
-        });
-        if (data.studentId) {
-          io.to(`student_${data.studentId}`).emit("payment_received", data);
-        }
+      const socketUtils = {
+        validatePayload,
+        canEmitTyping,
+        checkCallRateLimit,
+        isValidIceCandidate,
+        cleanupCall,
+        addTimer,
+        setPresenceRedis,
+        removePresenceRedis,
+        clearSocketTimers,
+      };
+
+      registerBootstrapHandlers({
+        ...baseContext,
+        Notification,
       });
 
-      socket.on("student_added", (data) => {
-        if (!validatePayload(data)) return;
-        io.to("admins").emit("new_student", data);
+      registerPaymentHandlers({
+        ...baseContext,
+        validatePayload,
       });
 
-      socket.on("fee_status_changed", (data) => {
-        if (!validatePayload(data)) return;
-        io.to("admins").emit("fee_update", data);
+      registerChatHandlers({
+        ...baseContext,
+        redisClient,
+        validatePayload,
+        canEmitTyping,
+        ChatService,
+        NotificationService,
       });
 
-      socket.on("reminder_triggered", (data) => {
-        if (!validatePayload(data)) return;
-        io.to("admins").emit("reminder_alert", data);
+      registerCallHandlers({
+        ...baseContext,
+        redisClient,
+        validatePayload,
+        checkCallRateLimit,
+        isValidIceCandidate,
+        cleanupCall,
+        addTimer,
+        CallSession,
+        ChatConversation,
+        NotificationService,
       });
 
-      // ========== CHAT EVENTS (all validated) ==========
-
-      socket.on("chat:send", async (payload) => {
-        try {
-          if (!validatePayload(payload)) {
-            socket.emit("error", { msg: "Payload too large" });
-            return;
-          }
-
-          const {
-            conversationId,
-            recipientId,
-            recipientType,
-            encryptedForRecipient,
-            encryptedForSender,
-            senderPublicKey,
-          } = payload || {};
-          if (!conversationId || !recipientId || !recipientType) return;
-
-          const message = await ChatService.sendMessage({
-            conversationId,
-            senderId: userId,
-            senderType: userType,
-            recipientId,
-            recipientType,
-            encryptedForRecipient,
-            encryptedForSender,
-            senderPublicKey,
-          });
-
-          const room = `${recipientType.toLowerCase()}_${recipientId}`;
-          io.to(room).emit("chat:message", message.toObject());
-          socket.emit("chat:sent", message.toObject());
-
-          // Get sender's display name
-          let senderDisplayName = userType;
-          if (userType === "Student") {
-            const student = await (
-              await import("../models/student.model.js")
-            ).Student.findById(userId).select("name");
-            senderDisplayName = student?.name || "Student";
-          } else if (userType === "Admin") {
-            const admin = await (
-              await import("../models/admin.model.js")
-            ).Admin.findById(userId).select("name");
-            senderDisplayName = admin?.name || "Admin";
-          }
-
-          await NotificationService.sendChatNotification({
-            recipientId,
-            recipientType,
-            conversationId,
-            senderName: senderDisplayName,
-          }).catch(() => {});
-        } catch (err) {
-          console.error("❌ chat:send:", err);
-        }
+      registerNotificationHandlers({
+        ...baseContext,
+        Notification,
       });
 
-      socket.on("chat:delivered", async ({ messageId }) => {
-        if (!messageId) return;
-        try {
-          const msg = await ChatService.markDelivered(messageId);
-          if (msg) {
-            const room = `${msg.senderType.toLowerCase()}_${msg.senderId}`;
-            io.to(room).emit("chat:status", {
-              messageId: msg._id,
-              status: msg.status,
-            });
-          }
-        } catch (err) {
-          console.error("❌ chat:delivered:", err);
-        }
+      registerPresenceHandlers({
+        ...baseContext,
+        setPresenceRedis,
+        removePresenceRedis,
+        initialOnline: true,
       });
 
-      socket.on("chat:read", async ({ messageId }) => {
-        if (!messageId) return;
-        try {
-          const msg = await ChatService.markRead(messageId);
-          if (msg) {
-            const room = `${msg.senderType.toLowerCase()}_${msg.senderId}`;
-            io.to(room).emit("chat:status", {
-              messageId: msg._id,
-              status: msg.status,
-            });
-          }
-        } catch (err) {
-          console.error("❌ chat:read:", err);
-        }
-      });
+      registerKeepAliveHandlers({ socket });
 
-      socket.on("chat:typing", ({ recipientId, recipientType }) => {
-        if (!recipientId || !recipientType) return;
-        const room = `${recipientType.toLowerCase()}_${recipientId}`;
-        io.to(room).emit("chat:typing", { from: { userId, userType } });
-      });
-
-      socket.on("chat:stop_typing", ({ recipientId, recipientType }) => {
-        if (!recipientId || !recipientType) return;
-        const room = `${recipientType.toLowerCase()}_${recipientId}`;
-        io.to(room).emit("chat:stop_typing", { from: { userId, userType } });
-      });
-
-      // ========== ACTIVE CONVERSATION TRACKING (to skip notifications) ==========
-
-      socket.on("chat:set-active-conversation", async ({ conversationId }) => {
-        try {
-          if (conversationId) {
-            // Store active conversation in Redis with TTL
-            const key = `active_chat:${userType}:${userId}`;
-            await redisClient.setEx(key, 3600, conversationId).catch(() => {});
-          }
-        } catch (err) {
-          console.error("❌ chat:set-active-conversation:", err);
-        }
-      });
-
-      socket.on("chat:clear-active-conversation", async () => {
-        try {
-          const key = `active_chat:${userType}:${userId}`;
-          await redisClient.del(key).catch(() => {});
-        } catch (err) {
-          console.error("❌ chat:clear-active-conversation:", err);
-        }
-      });
-
-      // ========== WEBRTC CALLS (all validated & cleaned) ==========
-
-      socket.on("call:offer", async (payload) => {
-        try {
-          // WebRTC SDP can be large, allow bigger payloads here
-          if (!validatePayload(payload, 120 * 1024)) {
-            socket.emit("call:error", { msg: "Call offer too large" });
-            return;
-          }
-
-          const { recipientId, recipientType, sdp, conversationId } = payload;
-
-          // ✅ Validate conversationId is present
-          if (!conversationId) {
-            console.error("❌ call:offer: Missing conversationId");
-            socket.emit("call:error", {
-              msg: "Conversation ID is required for calls",
-            });
-            return;
-          }
-
-          if (!recipientId || !recipientType || !sdp) {
-            console.error("❌ call:offer: Missing required fields");
-            socket.emit("call:error", {
-              msg: "Missing required call parameters",
-            });
-            return;
-          }
-
-          const callSession = await CallSession.create({
-            conversationId,
-            participants: [
-              { userId, userType },
-              { userId: recipientId, userType: recipientType },
-            ],
-            status: "RINGING",
-            startedAt: new Date(),
-          });
-
-          console.log(`📞 Call initiated: ${callSession._id}`);
-          console.log(`   From: ${userType} ${userId}`);
-          console.log(`   To: ${recipientType} ${recipientId}`);
-          console.log(
-            `   Room target: ${recipientType.toLowerCase()}_${recipientId}`,
-          );
-
-          // ✅ RULE 9: Store SDP in Redis with TTL (30s)
-          await redisClient
-            .setEx(
-              `call:sdp:${callSession._id}`,
-              30,
-              JSON.stringify({ offer: sdp }),
-            )
-            .catch(() => {});
-
-          const room = `${recipientType.toLowerCase()}_${recipientId}`;
-          console.log(`✅ Broadcasting call:offer to room: ${room}`);
-          io.to(room).emit("call:offer", {
-            callId: callSession._id,
-            from: { userId, userType },
-            sdp,
-            conversationId,
-          });
-          console.log(`✅ call:offer sent with callId: ${callSession._id}`);
-
-          // Ack to caller with callId (needed for ICE candidates)
-          socket.emit("call:offer:ack", {
-            callId: callSession._id,
-            recipientId,
-            recipientType,
-            conversationId,
-          });
-
-          // ✅ RULE 5: Auto-end unanswered calls after 60s
-          const timeoutId = setTimeout(async () => {
-            try {
-              const call = await CallSession.findById(callSession._id);
-              if (call && call.status === "RINGING") {
-                await CallSession.findByIdAndUpdate(callSession._id, {
-                  status: "ENDED",
-                  endedAt: new Date(),
-                });
-                io.to(room).emit("call:timeout", { callId: callSession._id });
-                await cleanupCall(callSession._id, socket.id);
-              }
-            } catch (err) {
-              console.error("❌ Call timeout:", err);
-            }
-          }, 60000);
-
-          addTimer(socket.id, timeoutId);
-
-          await NotificationService.sendInAppNotification({
-            userId: recipientId,
-            userType: recipientType,
-            title: "Incoming Call",
-            message: "You have an incoming call",
-            type: "CALL",
-            data: { callId: callSession._id },
-          }).catch(() => {});
-        } catch (err) {
-          console.error("❌ call:offer:", err);
-        }
-      });
-
-      socket.on("call:answer", async (payload) => {
-        try {
-          // WebRTC SDP can be large, allow bigger payloads here
-          if (!validatePayload(payload, 120 * 1024)) {
-            socket.emit("call:error", { msg: "Call answer too large" });
-            return;
-          }
-          const { callId, recipientId, recipientType, sdp } = payload;
-          if (!callId) return;
-
-          await CallSession.findByIdAndUpdate(callId, { status: "ACCEPTED" });
-
-          // ✅ RULE 9: Store answer SDP in Redis (TTL 30s)
-          await redisClient
-            .setEx(`call:sdp:${callId}`, 30, JSON.stringify({ answer: sdp }))
-            .catch(() => {});
-
-          const room = `${recipientType.toLowerCase()}_${recipientId}`;
-          io.to(room).emit("call:answer", { callId, sdp });
-        } catch (err) {
-          console.error("❌ call:answer:", err);
-        }
-      });
-
-      // ✅ RULE 5: ICE candidates in Redis with TTL
-      socket.on("call:ice", (payload) => {
-        const { recipientId, recipientType, candidate, callId } = payload || {};
-        if (!recipientId || !recipientType || !callId) return;
-        if (!validatePayload(candidate)) return;
-
-        // Store in Redis, not memory
-        redisClient
-          .lpush(`call:ice:${callId}`, JSON.stringify(candidate))
-          .catch(() => {});
-        redisClient.expire(`call:ice:${callId}`, 300).catch(() => {}); // 5 min TTL
-
-        const room = `${recipientType.toLowerCase()}_${recipientId}`;
-        io.to(room).emit("call:ice", { callId, candidate });
-      });
-
-      // ✅ RULE 5: Full cleanup on call end
-      socket.on("call:end", async (payload) => {
-        try {
-          const { callId, recipientId, recipientType, conversationId } =
-            payload;
-
-          if (callId) {
-            await cleanupCall(callId, socket.id);
-          }
-
-          const room = `${recipientType.toLowerCase()}_${recipientId}`;
-          io.to(room).emit("call:end", { callId });
-        } catch (err) {
-          console.error("❌ call:end:", err);
-        }
-      });
-
-      socket.on("call:mute-status", (payload) => {
-        try {
-          const { recipientId, recipientType, isMuted } = payload;
-          if (!recipientId || !recipientType) return;
-          const room = `${recipientType.toLowerCase()}_${recipientId}`;
-          io.to(room).emit("call:mute-status", { isMuted });
-        } catch (err) {
-          console.error("❌ call:mute:", err);
-        }
-      });
-
-      // ========== NOTIFICATIONS ==========
-
-      socket.on("mark_notification_read", async (notificationId) => {
-        try {
-          const n = await Notification.findById(notificationId);
-          if (n) {
-            await n.markAsRead();
-            socket.emit("notification_read", { notificationId, success: true });
-          }
-        } catch (err) {
-          console.error("❌ Mark read:", err);
-        }
-      });
-
-      // ========== KEEP ALIVE ==========
-
-      socket.on("ping", () => {
-        socket.emit("pong", { ts: Date.now() });
-      });
-
-      // ========== DISCONNECT - CRITICAL CLEANUP ==========
-
-      socket.on("disconnecting", () => {
-        console.log(`🔄 Disconnecting: ${socket.id}`);
-      });
-
-      socket.on("disconnect", async (reason) => {
-        console.log(`❌ Disconnected: ${socket.id} (${reason})`);
-
-        try {
-          // ✅ RULE 2 & 3: Complete disconnect cleanup
-
-          // 1. Remove ALL listeners
-          socket.removeAllListeners();
-
-          // 2. Clear all timers
-          clearSocketTimers(socket.id);
-
-          // 3. Remove from Redis presence
-          await removePresenceRedis(userType, userId);
-
-          // 4. End active calls
-          const calls = await CallSession.find({
-            participants: { $elemMatch: { userId, userType } },
-            status: { $in: ["RINGING", "ACCEPTED"] },
-          }).catch(() => []);
-
-          for (const call of calls) {
-            await cleanupCall(call._id, socket.id);
-          }
-
-          // 5. Notify others
-          io.emit("presence:update", {
-            userType,
-            userId,
-            online: false,
-            ts: new Date(),
-          });
-
-          console.log(`✅ Cleanup complete: ${socket.id}`);
-        } catch (err) {
-          console.error("❌ Disconnect cleanup error:", err);
-        }
-      });
-
-      socket.on("error", (err) => {
-        console.error(`⚠️ Socket error (${socket.id}):`, err);
+      registerDisconnectHandlers({
+        ...baseContext,
+        CallSession,
+        cleanupCall,
+        clearSocketTimers,
       });
     } catch (err) {
-      console.error("❌ Connection setup error:", err);
+      logger.error("Connection setup error", {
+        error: err.message,
+        stack: err.stack,
+        socketId: socket.id,
+      });
       socket.disconnect(true);
     }
   });
 
-  // ✅ RULE 2: Cluster-safe interval (only one per IO)
-  if (!io._statusInterval) {
-    const intervalId = setInterval(() => {
-      try {
-        const adminRooms = io.sockets.adapter.rooms.get("admins");
-        const count = adminRooms ? adminRooms.size : 0;
-
-        io.to("admins").emit("system_status", {
-          adminCount: count,
-          ts: new Date(),
-          uptime: process.uptime(),
-        });
-      } catch (err) {
-        console.error("❌ Status broadcast error:", err);
-      }
-    }, 60000);
-
-    io._statusInterval = intervalId;
-    appIntervals.push(intervalId);
-  }
+  registerSystemStatusHandlers({ io, logger, appIntervals });
 
   // ✅ RULE 2: Clear intervals on shutdown
   process.on("SIGTERM", () => {
-    console.log("🛑 Cleaning up intervals...");
-    appIntervals.forEach(clearInterval);
     socketTimers.forEach((_, socketId) => clearSocketTimers(socketId));
   });
 
   // Global error handler
   io.engine.on("connection_error", (err) => {
-    console.error("🔴 Connection error:", err.message);
+    logger.error("Socket engine connection error", {
+      error: err.message,
+      stack: err.stack,
+    });
   });
 };

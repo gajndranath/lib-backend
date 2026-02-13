@@ -15,6 +15,7 @@ const adminActionLogSchema = new Schema(
         "CREATE_STUDENT",
         "UPDATE_STUDENT",
         "ARCHIVE_STUDENT",
+        "REACTIVATE_STUDENT",
         "CREATE_SLOT",
         "UPDATE_SLOT",
         "DELETE_SLOT",
@@ -57,7 +58,7 @@ const adminActionLogSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index for audit queries
@@ -67,5 +68,5 @@ adminActionLogSchema.index({ targetEntity: 1, targetId: 1 });
 
 export const AdminActionLog = mongoose.model(
   "AdminActionLog",
-  adminActionLogSchema
+  adminActionLogSchema,
 );

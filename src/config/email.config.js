@@ -146,6 +146,11 @@ export const getEmailTransporter = () => {
 
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
+    console.log(`📧 sendEmail called: to=${to}, subject="${subject}"`);
+    console.log(
+      `📧 Email config - HOST:${process.env.EMAIL_HOST}, USER:${process.env.EMAIL_USER}`,
+    );
+
     if (process.env.EMAIL_DISABLED === "true") {
       console.warn("📧 Email disabled, skipping send:", { to, subject });
       return { success: false, error: "Email service disabled", skipped: true };
@@ -153,10 +158,9 @@ export const sendEmail = async (to, subject, text, html = null) => {
 
     const mailTransporter = getEmailTransporter();
     if (!mailTransporter) {
-      console.warn("📧 Email transporter not available, skipping send:", {
-        to,
-        subject,
-      });
+      console.error("❌ Email transporter not available!");
+      console.error("❌ emailAvailable:", emailAvailable);
+      console.error("❌ transporter:", transporter);
       // ✅ Don't fail the app if email is unavailable
       return {
         success: false,
@@ -209,6 +213,7 @@ export const sendEmail = async (to, subject, text, html = null) => {
       `;
     }
 
+    console.log(`📧 Attempting to send email via SMTP to ${to}...`);
     const info = await mailTransporter.sendMail(mailOptions);
     console.log(`✅ Email sent to ${to}: ${info.messageId}`);
     return { success: true, messageId: info.messageId };

@@ -7,6 +7,7 @@ import errorHandler from "./middlewares/error.middleware.js";
 import { cachingMiddleware } from "./middlewares/caching.middleware.js";
 import { deduplicationMiddleware } from "./middlewares/deduplication.middleware.js";
 import { heapSafetyGuard } from "./utils/heapSafetyGuard.js";
+import logger, { httpLogger } from "./utils/logger.js";
 
 const app = express();
 
@@ -14,6 +15,9 @@ const app = express();
 setInterval(() => {
   heapSafetyGuard.monitorHeap();
 }, 30000);
+
+// HTTP Request Logging Middleware
+app.use(httpLogger);
 
 // Trust proxy - important for HTTPS detection behind load balancers
 if (process.env.NODE_ENV === "production") {
@@ -46,27 +50,39 @@ app.use(
 );
 
 // CORS configuration - validate origins
-const allowedOrigins = process.env.CORS_ORIGIN?.split(",") || [
-  "http://localhost:3000",
+const allowedOrigins = [
+  "http://localhost:5173", // Vite default
+  "http://localhost:3000", // CRA default
+  "http://127.0.0.1:5173",
+  ...(process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+    : []),
 ];
+
+// 2. CORS Options Setup
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or server-side requests)
-    if (!origin || allowedOrigins.includes(origin)) {
+    // !origin allows server-to-server, mobile apps, or tools like Postman
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      process.env.NODE_ENV === "development"
+    ) {
       callback(null, true);
     } else {
-      callback(new Error("CORS policy violation"));
+      callback(new Error("CORS policy violation: This origin is not allowed."));
     }
   },
-  credentials: true,
+  credentials: true, // Cookies aur Authorization headers ke liye zaroori hai
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
     "X-Requested-With",
     "X-Request-ID",
+    "Accept",
   ],
-  maxAge: 600, // 10 minutes
+  maxAge: 600, // Preflight request cache (10 minutes)
   optionsSuccessStatus: 200,
 };
 
