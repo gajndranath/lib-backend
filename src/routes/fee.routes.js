@@ -7,6 +7,7 @@ import {
   markFeeAsPaid,
   markFeeAsDue,
   addAdvance,
+  applyAdvance,
   getFeeSummary,
   getDashboardPaymentStatus,
   getReceiptDetails,
@@ -29,24 +30,31 @@ router.route("/dashboard-status").get(getDashboardPaymentStatus);
 // Get receipt details (admin)
 router
   .route("/:studentId/:month/:year/receipt-details")
-  .get(authorizeRoles(UserRoles.SUPER_ADMIN), getReceiptDetails);
+  .get(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), getReceiptDetails);
 
 // Download receipt PDF (admin)
 router
   .route("/:studentId/:month/:year/receipt-pdf")
-  .get(authorizeRoles(UserRoles.SUPER_ADMIN), downloadReceiptPDF);
+  .get(
+    authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
+    downloadReceiptPDF,
+  );
 
-// Protected routes for Super Admin only
+// Protected routes for Admin and Super Admin
 router
   .route("/:studentId/:month/:year/paid")
-  .patch(authorizeRoles(UserRoles.SUPER_ADMIN), markFeeAsPaid);
+  .patch(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), markFeeAsPaid);
 
 router
   .route("/:studentId/:month/:year/due")
-  .patch(authorizeRoles(UserRoles.SUPER_ADMIN), markFeeAsDue);
+  .patch(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), markFeeAsDue);
 
 router
   .route("/:studentId/advance")
-  .post(authorizeRoles(UserRoles.SUPER_ADMIN), addAdvance);
+  .post(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), addAdvance);
+
+router
+  .route("/:studentId/advance/apply")
+  .post(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), applyAdvance);
 
 export default router;

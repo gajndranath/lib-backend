@@ -3,7 +3,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Admin } from "../models/admin.model.js";
-import sendEmail from "../utils/sendEmail.js";
+import { sendEmail } from "../config/email.config.js";
 
 /**
  * @desc    Forgot Password - Send reset link
@@ -22,22 +22,17 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   // Get reset token
   const resetToken = admin.getResetPasswordToken();
 
-  // Save admin (validateBeforeSave: false allows saving without checking other required fields if any, though here we just modified reset fields)
-  // We use save() to trigger the 'save' middleware if needed, but here specifically to persist the token
+  // Save admin
   await admin.save({ validateBeforeSave: false });
 
   // Create reset url
-  // Assuming frontend is simulated or on localhost:5173
-  const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/admin/reset-password/${resetToken}`;
+  const frontendUrl = process.env.FRONTEND_URL || "https://lib-frontend-j0e9.vercel.app";
+  const resetUrl = `${frontendUrl}/admin/reset-password/${resetToken}`;
 
-  const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please make a PUT request to: \n\n ${resetUrl}`;
+  const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please use the following link to reset your password: \n\n ${resetUrl}`;
 
   try {
-    await sendEmail({
-      email: admin.email,
-      subject: "Password Reset Token",
-      message,
-    });
+    await sendEmail(admin.email, "Password Reset Token", message);
 
     res.status(200).json(new ApiResponse(200, {}, "Email sent"));
   } catch (err) {

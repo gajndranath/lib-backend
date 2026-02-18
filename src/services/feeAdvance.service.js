@@ -70,19 +70,22 @@ class FeeAdvanceService {
   /**
    * Apply advance to a specific month
    */
-  static async applyAdvanceToMonth(studentId, month, year, adminId) {
-    const monthlyFee = await StudentMonthlyFee.findOne({
+  static async applyAdvanceToMonth(studentId, month, year, adminId, amount = null) {
+    const FeeGenerationService = (await import("./feeGeneration.service.js"))
+      .default;
+    const monthlyFee = await FeeGenerationService.ensureMonthlyFeeExists(
       studentId,
       month,
       year,
-    });
+      adminId,
+    );
 
-    if (!monthlyFee) {
-      throw new ApiError(404, "Fee record not found");
+    if (monthlyFee.locked) {
+      throw new ApiError(400, "This month is locked and cannot be modified");
     }
 
-    if (monthlyFee.coveredByAdvance) {
-      throw new ApiError(400, "Month already covered by advance");
+    if (monthlyFee.coveredByAdvance && !amount) {
+      throw new ApiError(400, "Month already fully covered by advance");
     }
 
     const advanceBalance = await AdvanceBalance.findOne({ studentId });
@@ -91,19 +94,27 @@ class FeeAdvanceService {
       throw new ApiError(404, "No advance balance found");
     }
 
-    if (advanceBalance.remainingAmount < monthlyFee.totalAmount) {
+    // Determine amount to apply
+    const amountToApply = amount ? roundFeeAmount(amount) : monthlyFee.totalAmount;
+
+    if (advanceBalance.remainingAmount < amountToApply) {
       throw new ApiError(400, "Insufficient advance balance");
     }
 
-    // Apply advance using model method
-    await advanceBalance.applyToMonth(month, year, monthlyFee.totalAmount);
+    // Apply advance to balance
+    await advanceBalance.applyToMonth(month, year, amountToApply);
 
-    // Update fee record
-    monthlyFee.status = "PAID";
-    monthlyFee.coveredByAdvance = true;
-    monthlyFee.paymentDate = new Date();
-    monthlyFee.updatedBy = adminId;
-    await monthlyFee.save();
+    // Update fee record using recordPayment for consistency
+    await monthlyFee.recordPayment({
+      paidAmount: amountToApply,
+      method: "ADVANCE",
+      remarks: "Applied from advance balance",
+    });
+
+    if (amountToApply >= monthlyFee.totalAmount) {
+      monthlyFee.coveredByAdvance = true;
+      await monthlyFee.save();
+    }
 
     // Log the action
     await AdminActionLog.create({
@@ -111,8 +122,11 @@ class FeeAdvanceService {
       action: "APPLY_ADVANCE",
       targetEntity: "FEE",
       targetId: monthlyFee._id,
-      newValue: { coveredByAdvance: true },
-      metadata: { studentId, month, year, amount: monthlyFee.totalAmount },
+      newValue: { 
+        amountApplied: amountToApply,
+        coveredByAdvance: monthlyFee.coveredByAdvance 
+      },
+      metadata: { studentId, month, year },
     });
 
     // Invalidate advance and fee summary caches

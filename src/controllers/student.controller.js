@@ -154,6 +154,23 @@ export const addAdvance = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, advanceBalance, "Advance added successfully"));
 });
 
+export const applyAdvance = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { month, year, amount } = req.body;
+
+  const result = await FeeService.applyAdvanceToMonth(
+    studentId,
+    parseInt(month),
+    parseInt(year),
+    req.admin._id,
+    amount,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Advance applied successfully"));
+});
+
 export const getFeeSummary = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
 

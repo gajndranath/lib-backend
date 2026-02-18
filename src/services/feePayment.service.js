@@ -39,16 +39,16 @@ class FeePaymentService {
 
     const paidAmount = roundFeeAmount(paymentData.paidAmount);
 
-    // Use model method to mark as paid
-    monthlyFee.markAsPaid({
+    // Use model method to record payment (handles status and locking)
+    await monthlyFee.recordPayment({
       paidAmount: paidAmount,
-      paymentMethod: paymentData.paymentMethod,
+      method: paymentData.paymentMethod, // Map frontend key to model key
       transactionId: paymentData.transactionId,
       remarks: paymentData.remarks,
     });
 
     monthlyFee.updatedBy = adminId;
-    await monthlyFee.save();
+    // monthlyFee.save() is already called inside recordPayment
 
     // Calculate due amount if payment is partial
     const dueAmount = roundFeeAmount(monthlyFee.totalAmount - paidAmount);
@@ -62,6 +62,7 @@ class FeePaymentService {
         monthKey,
         dueAmount,
         adminId,
+        paymentData.reminderDate, // Pass reminder date if provided by admin
       );
     } else {
       // Full payment - resolve any existing due for this month
@@ -124,6 +125,15 @@ class FeePaymentService {
           .select("totalDueAmount")
           .lean();
 
+        // Aggregate totals
+        const allMonthlyFees = await StudentMonthlyFee.find({ studentId }).lean();
+        
+        const totalPaid = allMonthlyFees.reduce((sum, fee) => sum + (fee.paidAmount || 0), 0);
+        const totalPending = allMonthlyFees
+          .filter(fee => fee.status === 'PENDING')
+          .reduce((sum, fee) => sum + fee.totalAmount, 0);
+        const totalDue = dueRecord ? dueRecord.totalDueAmount : 0;
+
         const summary = {
           student: {
             name: student.name,
@@ -133,6 +143,12 @@ class FeePaymentService {
           currentMonth: {
             month: new Date().getMonth(),
             year: new Date().getFullYear(),
+          },
+          totals: {
+            totalPaid,
+            totalDue,
+            totalPending,
+            overallTotal: totalPaid + totalDue + totalPending
           },
           feeHistory: monthlyFees.map((fee) => ({
             month: fee.month,

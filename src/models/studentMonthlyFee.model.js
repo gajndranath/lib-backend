@@ -149,18 +149,28 @@ studentMonthlyFeeSchema.virtual("totalAmount").get(function () {
   return Math.round(total * 100) / 100;
 });
 
-// Method to mark as paid
-studentMonthlyFeeSchema.methods.markAsPaid = function (paymentData) {
+// Method to record payment (handles partial or full)
+studentMonthlyFeeSchema.methods.recordPayment = function (paymentData) {
   if (this.locked) {
     throw new Error("This month is locked and cannot be modified");
   }
 
-  this.status = "PAID";
+  const { paidAmount, method, transactionId, remarks } = paymentData;
+  
+  // Update paid amount
+  this.paidAmount = (this.paidAmount || 0) + paidAmount;
   this.paymentDate = new Date();
-  this.paymentMethod = paymentData.method;
-  this.transactionId = paymentData.transactionId;
-  this.remarks = paymentData.remarks;
-  this.locked = true; // Once paid, lock it
+  this.paymentMethod = method || "CASH";
+  this.transactionId = transactionId;
+  this.remarks = remarks;
+
+  // Check if fully paid
+  if (this.paidAmount >= this.totalAmount) {
+    this.status = "PAID";
+    this.locked = true; // Lock only when fully paid
+  } else {
+    this.status = "DUE";
+  }
 
   return this.save();
 };

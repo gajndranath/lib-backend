@@ -33,7 +33,7 @@ const adminActionLogSchema = new Schema(
     targetEntity: {
       type: String,
       required: true,
-      enum: ["STUDENT", "SLOT", "FEE", "ADMIN", "REMINDER"],
+      enum: ["STUDENT", "SLOT", "FEE", "ADMIN", "REMINDER", "ADVANCE", "SYSTEM"],
     },
     targetId: {
       type: Schema.Types.ObjectId,

@@ -10,28 +10,24 @@ const retryEmailInit = async (maxRetries = 3, delay = 2000) => {
     try {
       console.log(`📧 Email init attempt ${attempt}/${maxRetries}...`);
 
+      const port = parseInt(process.env.EMAIL_PORT || "465");
+      const isSecure = port === 465;
+
       transporter = nodemailer.createTransport({
         host: process.env.EMAIL_HOST,
-        port: parseInt(process.env.EMAIL_PORT || "587"),
-        secure: process.env.EMAIL_PORT === "465",
+        port: port,
+        secure: isSecure,
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASSWORD,
         },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 15000,
-        pool: {
-          maxConnections: 5,
-          maxMessages: 50,
-          rateDelta: 2000,
-          rateLimit: 10,
-        },
+        connectionTimeout: 20000,
+        greetingTimeout: 20000,
+        socketTimeout: 20000,
+        pool: true,
         tls: {
           rejectUnauthorized: false,
         },
-        maxConnections: 1,
-        maxMessages: 100,
       });
 
       // ✅ Verify with timeout

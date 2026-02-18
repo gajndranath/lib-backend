@@ -101,6 +101,7 @@ class FeeDueService {
     monthKey,
     dueAmount,
     adminId,
+    reminderDate = null // New parameter
   ) {
     let dueRecord = await DueRecord.findOne({
       studentId,
@@ -114,23 +115,16 @@ class FeeDueService {
         dueRecord.totalDueAmount = roundFeeAmount(
           dueRecord.totalDueAmount + dueAmount,
         );
+        // Update reminder date if provided
+        if (reminderDate) dueRecord.reminderDate = reminderDate;
         await dueRecord.save();
       } else {
         // Month already exists in due record - update the amount
-        const { month, year } = parseMonthYearKey(monthKey);
-        const monthlyFee = await StudentMonthlyFee.findOne({
-          studentId,
-          month,
-          year,
-        });
-
-        if (monthlyFee) {
-          // Recalculate total due amount
-          dueRecord.totalDueAmount = roundFeeAmount(
-            dueRecord.totalDueAmount + dueAmount,
-          );
-          await dueRecord.save();
-        }
+        dueRecord.totalDueAmount = roundFeeAmount(
+          dueRecord.totalDueAmount + dueAmount,
+        );
+        if (reminderDate) dueRecord.reminderDate = reminderDate;
+        await dueRecord.save();
       }
     } else {
       // Create new due record for partial payment
@@ -138,6 +132,7 @@ class FeeDueService {
         studentId,
         monthsDue: [monthKey],
         totalDueAmount: dueAmount,
+        reminderDate: reminderDate || new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // Default to 3 days from now
         createdBy: adminId,
       });
     }
