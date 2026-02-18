@@ -3,7 +3,6 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import StudentService from "../services/student.service.js";
 import FeeService from "../services/fee.service.js";
-import SlotService from "../services/slot.service.js";
 import StudentNotificationService from "../services/studentNotification.service.js";
 import { studentRegistrationSchema } from "../utils/validators.js";
 
@@ -11,7 +10,6 @@ export const registerStudent = asyncHandler(async (req, res) => {
   // Validate input
   const validation = studentRegistrationSchema.safeParse(req.body);
   if (!validation.success) {
-    console.log("Validation errors:", validation.error.errors);
     throw new ApiError(400, "Validation Error", validation.error.errors);
   }
 
@@ -261,7 +259,7 @@ export const overrideStudentFee = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
   const { newMonthlyFee, reason } = req.body;
 
-  const student = await SlotService.overrideStudentFee(
+  const student = await StudentService.overrideStudentFee(
     studentId,
     newMonthlyFee,
     reason,

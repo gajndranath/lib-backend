@@ -55,6 +55,11 @@ const adminActionLogSchema = new Schema(
     metadata: {
       type: Schema.Types.Mixed,
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,

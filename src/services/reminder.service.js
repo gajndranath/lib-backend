@@ -218,6 +218,25 @@ class ReminderService {
       }
     }
 
+    // Notify Admins about the automated run
+    if (results.sent > 0 || results.failed > 0) {
+      try {
+        const Admin = (await import("../models/admin.model.js")).Admin;
+        const admins = await Admin.find({});
+        
+        for (const admin of admins) {
+          await NotificationService.sendAdminNotification(
+            admin._id,
+            "Daily Reminders Processed",
+            `Sent: ${results.sent}, Failed: ${results.failed}. Click to view details.`,
+            "SYSTEM_ALERT"
+          );
+        }
+      } catch (adminNotifyError) {
+        console.error("Failed to notify admins about reminders:", adminNotifyError);
+      }
+    }
+
     return results;
   }
 

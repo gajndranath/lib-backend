@@ -78,10 +78,10 @@ const setPresenceRedis = async (userType, userId, online) => {
   try {
     if (online) {
       // Set with 1 hour TTL - auto cleanup
-      await redisClient.setEx(key, 3600, JSON.stringify(payload));
+      await redisClient.setex(key, 3600, JSON.stringify(payload));
     } else {
       // Offline: keep for 5 minutes then auto-delete
-      await redisClient.setEx(key, 300, JSON.stringify(payload));
+      await redisClient.setex(key, 300, JSON.stringify(payload));
     }
   } catch (err) {
     logger.error("Redis presence error", {

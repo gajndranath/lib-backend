@@ -11,11 +11,11 @@ export const registerDisconnectHandlers = ({
   // ========== DISCONNECT - CRITICAL CLEANUP ==========
 
   socket.on("disconnecting", () => {
-    // ...existing code...
+    // Cleanup if needed
   });
 
   socket.on("disconnect", async (reason) => {
-    // ...existing code...
+    console.log(`Socket disconnected: ${socket.id}, reason: ${reason}`);
 
     try {
       // ✅ RULE 2 & 3: Complete disconnect cleanup
@@ -43,8 +43,6 @@ export const registerDisconnectHandlers = ({
         online: false,
         ts: new Date(),
       });
-
-      // ...existing code...
     } catch (err) {
       logger.error("Disconnect cleanup error", {
         error: err.message,

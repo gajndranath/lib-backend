@@ -39,6 +39,11 @@ const advanceBalanceSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Admin",
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,

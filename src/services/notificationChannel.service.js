@@ -135,8 +135,10 @@ class NotificationChannelService {
       );
 
       // Emit via socket (if socket is available)
-      const io = global.io;
-      if (io) {
+      try {
+        const { getIO } = await import("../sockets/index.js");
+        const io = getIO();
+        
         const roomPrefix = userType === "Admin" ? "admin_" : "student_";
         const room = `${roomPrefix}${notification.userId}`;
 
@@ -149,6 +151,9 @@ class NotificationChannelService {
 
         // Mark as delivered after emitting
         await savedNotification.markAsDelivered("IN_APP", "DELIVERED");
+      } catch (socketError) {
+        console.warn("Socket emission failed:", socketError.message);
+        // Don't fail the whole request if socket fails
       }
 
       return {

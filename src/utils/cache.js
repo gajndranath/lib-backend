@@ -1,11 +1,12 @@
-import Redis from "ioredis";
-
-const redisClient = new Redis(process.env.REDIS_URL);
+import { getRedisClient } from "../config/redis.js";
 
 class CacheService {
-  constructor(redisClient) {
-    this.client = redisClient;
-    this.defaultTTL = 300; // 5 minutes default
+  get client() {
+    return getRedisClient();
+  }
+
+  get defaultTTL() {
+    return 300; // 5 minutes default
   }
 
   /**
@@ -48,13 +49,30 @@ class CacheService {
   }
 
   /**
-   * Delete multiple keys by pattern
+   * Delete multiple keys by pattern using SCAN (production-safe, no KEYS blocking)
    */
   async delPattern(pattern) {
     try {
-      const keys = await this.client.keys(pattern);
-      if (keys.length > 0) {
-        await this.client.del(...keys);
+      const client = this.client;
+      // Use SCAN instead of KEYS to avoid blocking Redis in production
+      if (typeof client.scanStream === "function") {
+        // ioredis supports scanStream
+        const stream = client.scanStream({ match: pattern, count: 100 });
+        const keys = [];
+        await new Promise((resolve, reject) => {
+          stream.on("data", (batch) => keys.push(...batch));
+          stream.on("end", resolve);
+          stream.on("error", reject);
+        });
+        if (keys.length > 0) {
+          await client.del(...keys);
+        }
+      } else {
+        // Fallback for no-op client (Redis not configured)
+        const keys = await client.keys?.(pattern);
+        if (keys && keys.length > 0) {
+          await client.del(...keys);
+        }
       }
       return true;
     } catch (error) {
@@ -64,7 +82,7 @@ class CacheService {
   }
 
   /**
-   * Get or set - fetch from cache, if miss execute function and cache result
+   * Get or set — fetch from cache; on miss, execute fn and cache result
    */
   async getOrSet(key, fetchFn, ttl = this.defaultTTL) {
     try {
@@ -84,11 +102,11 @@ class CacheService {
   }
 
   /**
-   * Invalidate related cache entries
+   * Invalidate all cache entries with a given prefix
    */
   async invalidateGroup(prefix) {
     return await this.delPattern(`${prefix}*`);
   }
 }
 
-export default new CacheService(redisClient);
+export default new CacheService();

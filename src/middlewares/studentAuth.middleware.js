@@ -9,14 +9,12 @@ export const verifyStudentJWT = asyncHandler(async (req, _res, next) => {
       req.cookies?.studentAccessToken ||
       req.header("Authorization")?.replace("Bearer ", "");
 
-    // ...existing code...
     if (!token) throw new ApiError(401, "Unauthorized request");
 
     let decodedToken;
     try {
       decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     } catch (error) {
-      // ...existing code...
       throw error;
     }
     const student = await Student.findById(decodedToken?._id).select(

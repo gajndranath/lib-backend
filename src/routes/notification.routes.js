@@ -1,6 +1,9 @@
 import { Router } from "express";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
 import { verifyStudentJWT } from "../middlewares/studentAuth.middleware.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import {
   savePushSubscription,
   removePushSubscription,
@@ -20,19 +23,50 @@ import {
 
 const router = Router();
 
-// Apply student or admin authentication to all routes
-router.use((req, res, next) => {
-  // Try student JWT first
-  verifyStudentJWT(req, res, (err) => {
-    if (!err && req.student) return next();
-    // If not student, try admin JWT
-    verifyJWT(req, res, (err2) => {
-      if (!err2 && req.admin) return next();
-      // If neither, unauthorized
-      res.status(401).json({ message: "Unauthorized: no valid token" });
-    });
-  });
+import jwt from "jsonwebtoken";
+import { Student } from "../models/student.model.js";
+import { Admin } from "../models/admin.model.js";
+
+// Multi-role authentication: tries Student then Admin
+const verifyAnyJWT = asyncHandler(async (req, res, next) => {
+  const token =
+    req.cookies?.studentAccessToken ||
+    req.cookies?.accessToken ||
+    req.header("Authorization")?.replace("Bearer ", "");
+
+  if (!token) {
+    throw new ApiError(401, "No authentication token provided");
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    
+    // 1. Try Student
+    if (decoded.userType === "Student") {
+       const student = await Student.findById(decoded._id).select("-password -otpHash");
+       if (student) {
+         req.student = student;
+         return next();
+       }
+    }
+    
+    // 2. Try Admin
+    const admin = await Admin.findById(decoded._id).select("-password");
+    if (admin) {
+      if (!admin.isActive) throw new ApiError(403, "Admin account inactive");
+      req.admin = admin;
+      return next();
+    }
+
+    throw new ApiError(401, "Invalid user session");
+  } catch (error) {
+    throw new ApiError(401, error.message || "Authentication failed");
+  }
 });
+
+router.use(verifyAnyJWT);
+
+router.use(resolveTenant);
 
 // High-frequency notification operations - use notification limiter
 router.route("/history").get(notificationLimiter, getNotificationHistory);

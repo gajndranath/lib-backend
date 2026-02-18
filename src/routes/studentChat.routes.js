@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { verifyStudentJWT } from "../middlewares/studentAuth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import {
   apiLimiter,
   publicKeyLimiter,
@@ -34,6 +35,7 @@ const router = Router();
 
 router.use(apiLimiter);
 router.use(verifyStudentJWT);
+router.use(resolveTenant);
 
 router.route("/keys").post(setStudentPublicKey);
 router.route("/keys/:userType/:userId").get(publicKeyLimiter, getPublicKey);

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -121,6 +122,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
     fatherName,
     status: StudentStatus.INACTIVE,
     emailVerified: false,
+    tenantId: req.tenantId, // Capture tenantId from header/subdomain
   });
 
   // ✅ Generate and save OTP
@@ -131,13 +133,12 @@ export const registerStudent = asyncHandler(async (req, res) => {
   await student.save({ validateBeforeSave: false });
 
   // ✅ Send verification email
-  // ...existing code...
   const emailResult = await sendOtpEmail(email, otp, "VERIFY");
 
   if (emailResult?.success) {
-    // ...existing code...
+    console.log(`✅ Verification email sent to ${email}`);
   } else {
-    // ...existing code...
+    console.warn(`⚠️ Failed to send verification email to ${email}`);
   }
 
   return res.status(201).json(
@@ -163,7 +164,6 @@ export const registerStudent = asyncHandler(async (req, res) => {
 export const requestEmailOtp = asyncHandler(async (req, res) => {
   const validation = otpRequestSchema.safeParse(req.body);
   if (!validation.success) {
-    // ...existing code...
     throw new ApiError(400, "Validation Error", validation.error.issues);
   }
 
@@ -186,7 +186,6 @@ export const requestEmailOtp = asyncHandler(async (req, res) => {
   student.otpPurpose = purpose;
 
   await student.save({ validateBeforeSave: false });
-  // ...existing code...
   await sendOtpEmail(student.email, otp, purpose);
 
   return res
@@ -236,15 +235,33 @@ export const verifyOtpAndAuthenticate = asyncHandler(async (req, res) => {
     student.password = setPassword;
   }
 
+  // Ensure tenantId is set if resolved (fallback for existing students not migrated)
+  if (!student.tenantId && req.tenantId) {
+    student.tenantId = req.tenantId;
+  }
+
   await student.save();
 
   const accessToken = student.generateAccessToken();
+  const refreshToken = student.generateRefreshToken();
+
+  // Save refresh token
+  await Student.findByIdAndUpdate(student._id, { refreshToken });
+
   const safeStudent = await Student.findById(student._id).select(
-    "-password -otpHash -otpExpiresAt -otpPurpose",
+    "-password -otpHash -otpExpiresAt -otpPurpose -refreshToken",
   );
+
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
 
   return res
     .status(200)
+    .cookie("accessToken", accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
+    .cookie("refreshToken", refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
     .json(
       new ApiResponse(
         200,
@@ -280,12 +297,25 @@ export const loginStudent = asyncHandler(async (req, res) => {
   if (!isPasswordValid) throw new ApiError(401, "Invalid credentials");
 
   const accessToken = student.generateAccessToken();
+  const refreshToken = student.generateRefreshToken();
+
+  // Save refresh token
+  await Student.findByIdAndUpdate(student._id, { refreshToken });
+
   const safeStudent = await Student.findById(student._id).select(
-    "-password -otpHash -otpExpiresAt -otpPurpose",
+    "-password -otpHash -otpExpiresAt -otpPurpose -refreshToken",
   );
+
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
 
   return res
     .status(200)
+    .cookie("accessToken", accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
+    .cookie("refreshToken", refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
     .json(
       new ApiResponse(
         200,
@@ -296,9 +326,77 @@ export const loginStudent = asyncHandler(async (req, res) => {
 });
 
 export const logoutStudent = asyncHandler(async (req, res) => {
+  // Clear refresh token from DB
+  if (req.student?._id) {
+    await Student.findByIdAndUpdate(req.student._id, { refreshToken: null });
+  }
+
+  const options = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
+
   return res
     .status(200)
+    .clearCookie("accessToken", options)
+    .clearCookie("refreshToken", options)
     .json(new ApiResponse(200, null, "Logged out successfully"));
+});
+
+/**
+ * Refresh student tokens (rotate refresh token)
+ */
+export const refreshStudent = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies?.refreshToken || req.body?.refreshToken;
+
+  if (!incomingRefreshToken) {
+    throw new ApiError(401, "Refresh token is required");
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+  } catch {
+    throw new ApiError(401, "Invalid or expired refresh token");
+  }
+
+  if (decoded.userType !== "Student") {
+    throw new ApiError(401, "Invalid token type");
+  }
+
+  // Fetch student and verify stored token matches (rotation check)
+  const student = await Student.findById(decoded._id)
+    .select("+refreshToken")
+    .where({ isDeleted: false });
+
+  if (!student || student.refreshToken !== incomingRefreshToken) {
+    throw new ApiError(401, "Refresh token reuse detected or token invalid");
+  }
+
+  if (student.status === StudentStatus.ARCHIVED) {
+    throw new ApiError(403, "Account is archived");
+  }
+
+  // Issue new token pair
+  const newAccessToken = student.generateAccessToken();
+  const newRefreshToken = student.generateRefreshToken();
+
+  // Rotate: save new refresh token
+  await Student.findByIdAndUpdate(student._id, { refreshToken: newRefreshToken });
+
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", newAccessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
+    .cookie("refreshToken", newRefreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
+    .json(new ApiResponse(200, { accessToken: newAccessToken }, "Tokens refreshed"));
 });
 
 export const requestPasswordReset = asyncHandler(async (req, res) => {
@@ -430,8 +528,10 @@ export const updateStudentProfile = asyncHandler(async (req, res) => {
 
 export const getStudentDashboard = asyncHandler(async (req, res) => {
   const { Student } = await import("../models/student.model.js");
-  const { StudentMonthlyFee } =
+    await import("../models/slot.model.js");
     await import("../models/studentMonthlyFee.model.js");
+    const { Announcement } = await import("../models/announcement.model.js");
+    const Notification = (await import("../models/notification.model.js")).default;
   const studentDoc = await Student.findById(req.student._id)
     .populate({
       path: "slotId",
@@ -447,21 +547,32 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
 
   const studentId = studentDoc._id;
 
-  const [feeSummary, recentPayments] = await Promise.all([
-    FeeService.getStudentFeeSummary(studentId),
-    StudentMonthlyFee.find({ studentId, status: "PAID" })
-      .sort({ paymentDate: -1, createdAt: -1 })
-      .limit(6)
-      .lean(),
-  ]);
-
-  const dueItems = await StudentMonthlyFee.find({
-    studentId,
-    status: "DUE",
-  })
-    .sort({ year: -1, month: -1 })
-    .limit(3)
-    .lean();
+  const [feeSummary, recentPayments, dueItems, unreadNotifications, announcements] =
+    await Promise.all([
+      FeeService.getStudentFeeSummary(studentId),
+      StudentMonthlyFee.find({ studentId, status: "PAID" })
+        .sort({ paymentDate: -1, createdAt: -1 })
+        .limit(6)
+        .lean(),
+      StudentMonthlyFee.find({ studentId, status: "DUE" })
+        .sort({ year: -1, month: -1 })
+        .limit(3)
+        .lean(),
+      Notification.find({ userId: studentId, read: false })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean(),
+      Announcement.find({
+        $or: [
+          { targetScope: "ALL_STUDENTS" },
+          { targetScope: "SLOT", slotId: studentDoc.slotId?._id || studentDoc.slotId },
+          { targetScope: "SPECIFIC_STUDENTS", recipientIds: studentId },
+        ],
+      })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean(),
+    ]);
 
   // Build a full student profile object for dashboard (all personal fields)
   const student = {
@@ -510,6 +621,8 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
         feeSummary,
         recentPayments,
         dueItems,
+        unreadNotifications,
+        announcements,
       },
       "Student dashboard fetched",
     ),
@@ -862,4 +975,15 @@ export const downloadPaymentReceiptPDF = asyncHandler(async (req, res) => {
     `attachment; filename="receipt-${month}-${year}.html"`,
   );
   res.send(html);
+});
+
+// Get available slots for student selection
+export const getAvailableSlots = asyncHandler(async (_req, res) => {
+  const { Slot } = await import("../models/slot.model.js");
+  
+  const slots = await Slot.find({ isActive: true })
+    .select("name timeRange monthlyFee totalSeats")
+    .lean();
+
+  return res.status(200).json(new ApiResponse(200, slots, "Available slots fetched"));
 });

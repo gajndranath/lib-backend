@@ -7,25 +7,29 @@ import { getVapidPublicKey } from "../config/webpush.config.js";
 // Save push subscription (web or FCM)
 export const savePushSubscription = asyncHandler(async (req, res) => {
   const { subscription, type = "web", deviceInfo = {} } = req.body;
-  const adminId = req.admin._id;
+  const userId = req.student?._id || req.admin?._id;
+  const userRole = req.student ? "Student" : req.admin ? "Admin" : null;
 
   if (!subscription) {
     throw new ApiError(400, "Subscription is required");
   }
 
-  const Admin = (await import("../models/admin.model.js")).Admin;
+  if (!userId) {
+    throw new ApiError(401, "User not authenticated for subscription");
+  }
 
-  // Update based on type
-  if (type === "web") {
-    await Admin.findByIdAndUpdate(adminId, {
-      webPushSubscription: subscription,
-      deviceInfo: deviceInfo,
-    });
-  } else if (type === "fcm") {
-    await Admin.findByIdAndUpdate(adminId, {
-      fcmToken: subscription.token || subscription,
-      deviceInfo: deviceInfo,
-    });
+  if (userRole === "Admin") {
+    const Admin = (await import("../models/admin.model.js")).Admin;
+    const update = { deviceInfo };
+    if (type === "web") update.webPushSubscription = subscription;
+    else if (type === "fcm") update.fcmToken = subscription.token || subscription;
+    await Admin.findByIdAndUpdate(userId, update);
+  } else {
+    const Student = (await import("../models/student.model.js")).Student;
+    const update = { deviceInfo };
+    if (type === "web") update.webPushSubscription = subscription;
+    else if (type === "fcm") update.fcmToken = subscription.token || subscription;
+    await Student.findByIdAndUpdate(userId, update);
   }
 
   return res
@@ -36,18 +40,19 @@ export const savePushSubscription = asyncHandler(async (req, res) => {
 // Remove push subscription
 export const removePushSubscription = asyncHandler(async (req, res) => {
   const { type = "web" } = req.body;
-  const adminId = req.admin._id;
+  const userId = req.student?._id || req.admin?._id;
+  const userRole = req.student ? "Student" : "Admin";
 
-  const Admin = (await import("../models/admin.model.js")).Admin;
+  const update = {};
+  if (type === "web") update.webPushSubscription = null;
+  else if (type === "fcm") update.fcmToken = null;
 
-  if (type === "web") {
-    await Admin.findByIdAndUpdate(adminId, {
-      webPushSubscription: null,
-    });
-  } else if (type === "fcm") {
-    await Admin.findByIdAndUpdate(adminId, {
-      fcmToken: null,
-    });
+  if (userRole === "Admin") {
+    const Admin = (await import("../models/admin.model.js")).Admin;
+    await Admin.findByIdAndUpdate(userId, update);
+  } else {
+    const Student = (await import("../models/student.model.js")).Student;
+    await Student.findByIdAndUpdate(userId, update);
   }
 
   return res
@@ -57,7 +62,11 @@ export const removePushSubscription = asyncHandler(async (req, res) => {
 
 // Test all notification channels
 export const testNotificationChannels = asyncHandler(async (req, res) => {
-  const results = await NotificationService.testChannels(req.admin._id);
+  const adminId = req.admin?._id;
+  if (!adminId) {
+    throw new ApiError(403, "Only admins can test channels");
+  }
+  const results = await NotificationService.testChannels(adminId);
 
   return res
     .status(200)
@@ -130,6 +139,7 @@ export const getNotificationHistory = asyncHandler(async (req, res) => {
 // Mark notification as read
 export const markAsRead = asyncHandler(async (req, res) => {
   const { notificationId } = req.params;
+  const userId = req.student?._id || req.admin?._id;
 
   const Notification = (await import("../models/notification.model.js"))
     .default;
@@ -140,7 +150,7 @@ export const markAsRead = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Notification not found");
   }
 
-  if (notification.userId.toString() !== req.admin._id.toString()) {
+  if (String(notification.userId) !== String(userId)) {
     throw new ApiError(403, "Not authorized to update this notification");
   }
 
@@ -153,15 +163,17 @@ export const markAsRead = asyncHandler(async (req, res) => {
 
 // Mark all notifications as read
 export const markAllAsRead = asyncHandler(async (req, res) => {
+  const userId = req.student?._id || req.admin?._id;
+
   const Notification = (await import("../models/notification.model.js"))
     .default;
 
   await Notification.updateMany(
-    { userId: req.admin._id, read: false },
+    { userId: userId, read: false },
     { $set: { read: true, readAt: new Date() } },
   );
 
-  const unreadCount = await Notification.getUnreadCount(req.admin._id);
+  const unreadCount = await Notification.getUnreadCount(userId);
 
   return res
     .status(200)
@@ -172,35 +184,33 @@ export const markAllAsRead = asyncHandler(async (req, res) => {
 
 // Get notification preferences
 export const getNotificationPreferences = asyncHandler(async (req, res) => {
-  const Admin = (await import("../models/admin.model.js")).Admin;
+  const userId = req.student?._id || req.admin?._id;
+  const userRole = req.student ? "Student" : "Admin";
 
-  const admin = await Admin.findById(req.admin._id).select(
-    "notificationPreferences",
-  );
-
-  if (!admin) {
-    throw new ApiError(404, "Admin not found");
+  if (userRole === "Admin") {
+    const Admin = (await import("../models/admin.model.js")).Admin;
+    const admin = await Admin.findById(userId).select("notificationPreferences");
+    if (!admin) throw new ApiError(404, "Admin not found");
+    return res.status(200).json(new ApiResponse(200, admin.notificationPreferences, "Notification preferences fetched"));
+  } else {
+    // Students might not have specific preferences yet, return defaults
+    return res.status(200).json(new ApiResponse(200, {}, "Default student preferences"));
   }
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        admin.notificationPreferences,
-        "Notification preferences fetched",
-      ),
-    );
 });
 
 // Update notification preferences
 export const updateNotificationPreferences = asyncHandler(async (req, res) => {
   const { preferences } = req.body;
+  const adminId = req.admin?._id;
+
+  if (!adminId) {
+    throw new ApiError(403, "Only admins can update preferences");
+  }
 
   const Admin = (await import("../models/admin.model.js")).Admin;
 
   const admin = await Admin.findByIdAndUpdate(
-    req.admin._id,
+    adminId,
     { notificationPreferences: preferences },
     { new: true },
   ).select("notificationPreferences");
@@ -239,6 +249,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
   const results = {};
 
   try {
+    const adminId = req.admin?._id;
     if (channel === "all") {
       // Send via all available channels
       const multiChannelResult =
@@ -253,7 +264,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
             phone: student.phone,
             fcmToken: student.fcmToken,
             webPushSubscription: student.webPushSubscription,
-            sentBy: req.admin._id,
+            sentBy: userId,
           },
         });
       results.all = multiChannelResult;
@@ -272,7 +283,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
           phone: null,
           fcmToken: null,
           webPushSubscription: null,
-          sentBy: req.admin._id,
+          sentBy: adminId,
         },
       });
     } else if (channel === "sms") {
@@ -296,7 +307,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
         {
           type: "PAYMENT_DUE",
           studentId: student._id.toString(),
-          sentBy: req.admin._id.toString(),
+          sentBy: userId?.toString(),
         },
       );
     } else if (channel === "in-app") {
@@ -307,7 +318,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
         type: "PAYMENT_DUE",
         data: {
           studentId: student._id,
-          sentBy: req.admin._id,
+          sentBy: adminId,
         },
       });
     } else {

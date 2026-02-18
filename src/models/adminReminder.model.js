@@ -112,6 +112,11 @@ const adminReminderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Admin",
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -120,6 +125,7 @@ const adminReminderSchema = new Schema(
 
 // Index for frequent queries
 adminReminderSchema.index({ adminId: 1, isActive: 1, isPaused: 1 });
+adminReminderSchema.index({ tenantId: 1, type: 1, isActive: 1 });
 adminReminderSchema.index({ type: 1, isActive: 1 });
 adminReminderSchema.index({ "schedule.nextTriggerDate": 1, isActive: 1 });
 adminReminderSchema.index({ month: 1, year: 1, isActive: 1 });

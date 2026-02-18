@@ -43,11 +43,16 @@ const chatConversationSchema = new Schema(
       type: Boolean,
       default: true,
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   { timestamps: true },
 );
 
-chatConversationSchema.index({ participantsHash: 1 }, { unique: true });
+chatConversationSchema.index({ tenantId: 1, participantsHash: 1 }, { unique: true });
 chatConversationSchema.index({ lastMessageAt: -1 });
 
 export const ChatConversation = mongoose.model(

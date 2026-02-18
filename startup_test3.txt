@@ -1,0 +1,84 @@
+✅ All cron jobs scheduled and active
+[dotenv@17.2.3] injecting env (31) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
+[2026-02-18 13:16:57] [32minfo[39m: 🚀 Server initialization started {
+  "env": "development"
+}
+✅ Firebase initialized (singleton)
+📧 Email init attempt 1/3...
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+[2026-02-18 13:16:57] [31merror[39m: Unhandled Rejection {
+  "reason": "Error: Redis unavailable",
+  "promise": "[object Promise]"
+}
+✅ Email server verified (attempt 1/3)
+📧 Email service initialized successfully
+Initializing Web Push with VAPID keys...
+Public Key (first 20 chars): BKmB8RbT21axZo3yPDvg...
+✅ Web Push initialized successfully
+[2026-02-18 13:16:59] [32minfo[39m: MongoDB connected! DB HOST: ac-16wr34d-shard-00-00.ph6aigy.mongodb.net {
+  "host": "ac-16wr34d-shard-00-00.ph6aigy.mongodb.net",
+  "poolSize": "max=50, min=10"
+}
+[2026-02-18 13:17:00] [31merror[39m: Uncaught Exception {
+  "error": "listen EADDRINUSE: address already in use :::8000",
+  "stack": "Error: listen EADDRINUSE: address already in use :::8000\n    at Server.setupListenHandle [as _listen2] (node:net:1937:16)\n    at listenInCluster (node:net:1994:12)\n    at Server.listen (node:net:2099:7)\n    at file:///D:/client/librarya/backend/src/index.js:79:14\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)"
+}

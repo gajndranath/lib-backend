@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { verifyJWT, authorizeRoles } from "../middlewares/auth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import { apiLimiter } from "../middlewares/rateLimiter.middleware.js";
 import { UserRoles } from "../constants/constants.js";
 import {
@@ -15,6 +16,7 @@ const router = Router();
 // Apply rate limiting and authentication to all routes
 router.use(apiLimiter);
 router.use(verifyJWT);
+router.use(resolveTenant);
 
 // Get all slots (all staff can view)
 router.route("/").get(getAllSlots);

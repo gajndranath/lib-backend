@@ -219,6 +219,9 @@ class StudentService {
     // Reactivate
     await student.reactivate();
 
+    // Invalidate student cache
+    await cacheService.del(CACHE_KEYS.STUDENT(studentId));
+
     // Log the action
     await AdminActionLog.create({
       adminId,
@@ -328,6 +331,41 @@ class StudentService {
       .lean();
 
     return students;
+  }
+
+  /**
+   * Override a student's monthly fee (SUPER_ADMIN only)
+   * Moved from SlotService — this is a student domain operation.
+   */
+  static async overrideStudentFee(studentId, newMonthlyFee, reason, adminId) {
+    const student = await Student.findById(studentId);
+    if (!student) throw new ApiError(404, "Student not found");
+
+    const oldValue = { monthlyFee: student.monthlyFee, feeOverride: student.feeOverride };
+
+    student.monthlyFee = newMonthlyFee;
+    student.feeOverride = true;
+    student.notes = student.notes
+      ? `${student.notes}\nFee overridden on ${new Date().toISOString()}: ${reason}`
+      : `Fee overridden: ${reason}`;
+
+    await student.save();
+
+    // Invalidate student cache
+    await cacheService.del(CACHE_KEYS.STUDENT(studentId));
+    await cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId));
+
+    await AdminActionLog.create({
+      adminId,
+      action: "OVERRIDE_FEE",
+      targetEntity: "STUDENT",
+      targetId: student._id,
+      oldValue,
+      newValue: { monthlyFee: newMonthlyFee, feeOverride: true, reason },
+      metadata: { studentId: student._id },
+    });
+
+    return student;
   }
 }
 

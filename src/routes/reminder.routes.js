@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { verifyJWT, authorizeRoles } from "../middlewares/auth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import { apiLimiter } from "../middlewares/rateLimiter.middleware.js";
 import {
   getMyReminders,
@@ -17,6 +18,7 @@ const router = Router();
 // Apply rate limiting and authentication to all routes
 router.use(apiLimiter);
 router.use(verifyJWT);
+router.use(resolveTenant);
 
 // Get my reminders (all staff can view their own)
 router.route("/").get(getMyReminders);

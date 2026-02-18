@@ -54,7 +54,7 @@ export const deleteSlot = asyncHandler(async (req, res) => {
   const slot = await SlotService.updateSlot(
     slotId,
     { isActive: false },
-    req.admin._id
+    req.admin._id,
   );
 
   return res

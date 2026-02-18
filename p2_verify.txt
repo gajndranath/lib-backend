@@ -1,0 +1,29 @@
+✅ All cron jobs scheduled and active
+[dotenv@17.2.3] injecting env (31) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+[2026-02-18 13:28:37] [32minfo[39m: 🚀 Server initialization started {
+  "env": "development"
+}
+✅ Firebase initialized (singleton)
+📧 Email init attempt 1/3...
+✅ Email server verified (attempt 1/3)
+📧 Email service initialized successfully
+Initializing Web Push with VAPID keys...
+Public Key (first 20 chars): BKmB8RbT21axZo3yPDvg...
+✅ Web Push initialized successfully
+[2026-02-18 13:28:40] [32minfo[39m: MongoDB connected! DB HOST: ac-16wr34d-shard-00-00.ph6aigy.mongodb.net {
+  "host": "ac-16wr34d-shard-00-00.ph6aigy.mongodb.net",
+  "poolSize": "max=50, min=10"
+}
+[2026-02-18 13:28:40] [32minfo[39m: ✅ Server running on port: 8000 {
+  "port": "8000",
+  "environment": "development"
+}
+[2026-02-18 13:28:40] [32minfo[39m: ⏰ Cron Jobs are active and monitoring payments 
+[2026-02-18 13:28:40] [32minfo[39m: 📧 Email service: ✅ Configured 
+[2026-02-18 13:28:40] [32minfo[39m: 🔥 Firebase: ✅ Configured 
+[2026-02-18 13:28:40] [32minfo[39m: 🔔 Web Push: ✅ Configured 
+[2026-02-18 13:28:40] [32minfo[39m: 🔌 Socket.IO server is listening with optimized settings 
+[2026-02-18 13:28:40] [32minfo[39m: 🌍 Environment: development 
+[2026-02-18 13:28:40] [32minfo[39m: ⚙️  Rate limiting: ENABLED with per-endpoint optimization 
+[2026-02-18 13:28:40] [32minfo[39m: 💾 Memory management: ENABLED 
+[2026-02-18 13:28:40] [32minfo[39m: 🔄 Connection pooling: ENABLED (25 max connections) 

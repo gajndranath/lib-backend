@@ -66,6 +66,11 @@ const slotChangeHistorySchema = new Schema(
       type: Boolean,
       default: true,
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,

@@ -14,6 +14,8 @@ import {
   roundFeeAmount,
 } from "../utils/feeHelpers.js";
 import { ReminderType } from "../constants/constants.js";
+import cacheService from "../utils/cache.js";
+import { CACHE_KEYS } from "../utils/cacheStrategy.js";
 
 class FeeDueService {
   /**
@@ -81,6 +83,12 @@ class FeeDueService {
       newValue: { status: "DUE", reminderDate },
       metadata: { studentId, month, year },
     });
+
+    // Invalidate fee caches so next read reflects updated due status
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT_DUE(studentId.toString())),
+    ]);
 
     return { monthlyFee, dueRecord };
   }

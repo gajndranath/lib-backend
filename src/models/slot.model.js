@@ -37,6 +37,11 @@ const slotSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Admin",
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -59,9 +64,8 @@ slotSchema.virtual("availableSeats").get(function () {
 });
 
 // Indexes
-slotSchema.index({ name: 1 }, { unique: true });
-slotSchema.index({ isActive: 1 });
-// Compound indexes for occupancy and filtering queries
+slotSchema.index({ tenantId: 1, name: 1 }, { unique: true }); // Unique per tenant
+slotSchema.index({ tenantId: 1, isActive: 1 });
 slotSchema.index({ isActive: 1, totalSeats: 1 });
 
 export const Slot = mongoose.model("Slot", slotSchema);

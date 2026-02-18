@@ -3,8 +3,8 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import compression from "compression";
+import mongoSanitize from "express-mongo-sanitize";
 import errorHandler from "./middlewares/error.middleware.js";
-import { cachingMiddleware } from "./middlewares/caching.middleware.js";
 import { deduplicationMiddleware } from "./middlewares/deduplication.middleware.js";
 import { heapSafetyGuard } from "./utils/heapSafetyGuard.js";
 import logger, { httpLogger } from "./utils/logger.js";
@@ -80,6 +80,7 @@ const corsOptions = {
     "Authorization",
     "X-Requested-With",
     "X-Request-ID",
+    "X-Tenant-ID",
     "Accept",
   ],
   maxAge: 600, // Preflight request cache (10 minutes)
@@ -95,12 +96,29 @@ app.use(express.urlencoded({ limit: "16kb", extended: true }));
 // Cookie parser
 app.use(cookieParser());
 
+// NoSQL injection protection — sanitize req.body, req.query, req.params
+// NoSQL injection protection — sanitize req.body, req.query, req.params
+// CUSTOM MIDDLEWARE: Compatible with Express 5 (req.query is a getter)
+app.use((req, res, next) => {
+  if (req.body) req.body = mongoSanitize.sanitize(req.body);
+  if (req.params) req.params = mongoSanitize.sanitize(req.params);
+  if (req.query) {
+    const sanitizedQuery = mongoSanitize.sanitize(req.query);
+    if (sanitizedQuery !== req.query) {
+      for (const key in req.query) {
+        delete req.query[key];
+      }
+      Object.assign(req.query, sanitizedQuery);
+    }
+  }
+  next();
+});
+
 // PERFORMANCE OPTIMIZATION MIDDLEWARES
 // Deduplication for write operations (prevents double submissions)
 app.use(deduplicationMiddleware);
-
-// Caching for read operations (reduces database load)
-app.use(cachingMiddleware);
+// Note: Read caching is handled at the service layer (utils/cache.js)
+// using targeted keys with explicit invalidation on mutations.
 
 // Import routes
 import studentRouter from "./routes/student.routes.js";
@@ -114,6 +132,9 @@ import studentAnnouncementRouter from "./routes/studentAnnouncement.routes.js";
 import slotRouter from "./routes/slot.routes.js";
 import feeRouter from "./routes/fee.routes.js";
 import reminderRouter from "./routes/reminder.routes.js";
+import libraryRouter from "./routes/library.routes.js";
+import expenseRouter from "./routes/expense.routes.js";
+import attendanceRouter from "./routes/attendance.routes.js";
 
 // Register routes
 app.use("/api/v1/students", studentRouter);
@@ -127,6 +148,9 @@ app.use("/api/v1/student-announcements", studentAnnouncementRouter);
 app.use("/api/v1/slots", slotRouter);
 app.use("/api/v1/fees", feeRouter);
 app.use("/api/v1/reminders", reminderRouter);
+app.use("/api/v1/library", libraryRouter);
+app.use("/api/v1/expenses", expenseRouter);
+app.use("/api/v1/attendance", attendanceRouter);
 
 // Health check - minimal info
 app.get("/health", (req, res) => {

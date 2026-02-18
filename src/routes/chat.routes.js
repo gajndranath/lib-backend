@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import {
   apiLimiter,
   chatLimiter,
@@ -25,6 +26,7 @@ const router = Router();
 
 // Apply appropriate rate limiters
 router.use(verifyJWT);
+router.use(resolveTenant);
 
 // Public key fetching - very lenient rate limit (heavily cached)
 router.route("/keys/:userType/:userId").get(publicKeyLimiter, getPublicKey);

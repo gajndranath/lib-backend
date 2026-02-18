@@ -33,6 +33,11 @@ const announcementSchema = new Schema(
         bodyCiphertext: String,
       },
     ],
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   { timestamps: true },
 );

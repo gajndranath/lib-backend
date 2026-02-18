@@ -9,6 +9,8 @@ import { Student } from "../models/student.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { roundFeeAmount } from "../utils/feeHelpers.js";
+import cacheService from "../utils/cache.js";
+import { CACHE_KEYS } from "../utils/cacheStrategy.js";
 
 class FeeAdvanceService {
   /**
@@ -55,6 +57,12 @@ class FeeAdvanceService {
       newValue: { amount: roundedAmount },
       metadata: { studentId },
     });
+
+    // Invalidate advance and fee summary caches
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.STUDENT_ADVANCE(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId.toString())),
+    ]);
 
     return advanceBalance;
   }
@@ -106,6 +114,13 @@ class FeeAdvanceService {
       newValue: { coveredByAdvance: true },
       metadata: { studentId, month, year, amount: monthlyFee.totalAmount },
     });
+
+    // Invalidate advance and fee summary caches
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.STUDENT_ADVANCE(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT_DUE(studentId.toString())),
+    ]);
 
     return { monthlyFee, advanceBalance };
   }

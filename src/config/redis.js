@@ -49,7 +49,8 @@ export const getRedisClient = () => {
   if (!redisClient) {
     // Return a no-op client
     return {
-      setEx: () => Promise.resolve(),
+      setex: () => Promise.resolve(), // Correct lowercase for ioredis compatibility
+      set: () => Promise.resolve(),
       del: () => Promise.resolve(),
       lpush: () => Promise.resolve(),
       expire: () => Promise.resolve(),

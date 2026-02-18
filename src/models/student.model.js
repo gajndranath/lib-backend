@@ -11,6 +11,12 @@ const studentSchema = new Schema(
       required: true,
       trim: true,
     },
+    libraryId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
     phone: {
       type: String,
       required: true,
@@ -163,6 +169,12 @@ const studentSchema = new Schema(
         trim: true,
       },
     ],
+    refreshToken: { type: String, select: false },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -241,9 +253,19 @@ studentSchema.methods.generateAccessToken = function () {
       _id: this._id,
       email: this.email,
       userType: "Student",
+      tenantId: this.tenantId,
     },
     process.env.ACCESS_TOKEN_SECRET,
     { expiresIn: process.env.ACCESS_TOKEN_EXPIRY },
+  );
+};
+
+// Refresh Token Generation Method
+studentSchema.methods.generateRefreshToken = function () {
+  return jwt.sign(
+    { _id: this._id, userType: "Student" },
+    process.env.REFRESH_TOKEN_SECRET,
+    { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "7d" },
   );
 };
 

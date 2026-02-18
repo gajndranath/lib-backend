@@ -90,6 +90,11 @@ const notificationSchema = new Schema(
       type: Date,
       index: { expireAfterSeconds: 2592000 }, // Auto-delete after 30 days
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -97,6 +102,7 @@ const notificationSchema = new Schema(
 );
 
 // Indexes
+notificationSchema.index({ tenantId: 1, userId: 1, read: 1 });
 notificationSchema.index({ userId: 1, read: 1 });
 notificationSchema.index({ createdAt: -1 });
 notificationSchema.index({ type: 1, createdAt: -1 });

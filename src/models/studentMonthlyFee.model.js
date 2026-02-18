@@ -97,6 +97,11 @@ const studentMonthlyFeeSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Admin",
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -111,6 +116,8 @@ studentMonthlyFeeSchema.index(
 );
 
 // Indexes for queries
+studentMonthlyFeeSchema.index({ tenantId: 1, status: 1 });
+studentMonthlyFeeSchema.index({ tenantId: 1, month: 1, year: 1 });
 studentMonthlyFeeSchema.index({ status: 1 });
 studentMonthlyFeeSchema.index({ month: 1, year: 1 });
 studentMonthlyFeeSchema.index({ locked: 1 });

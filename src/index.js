@@ -12,12 +12,6 @@ import { socketHandlers } from "./sockets/index.js";
 import { initializeFirebase } from "./config/firebase.config.js";
 import { initializeEmail } from "./config/email.config.js";
 import { initializeWebPush } from "./config/webpush.config.js";
-import {
-  socketOptimizationConfig,
-  SocketConnectionPoolManager,
-  setupSocketMemoryManagement,
-} from "./utils/socketOptimizer.js";
-import { monitorConnectionPool } from "./utils/queryOptimizations.js";
 import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
 import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.js";
 
@@ -37,7 +31,7 @@ import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.j
   // Continue with server setup
   const server = http.createServer(app);
 
-  // Socket.io initialization with OPTIMIZED CONFIG
+  // Socket.io initialization with optimized config
   const io = new Server(server, {
     cors: {
       origin:
@@ -47,23 +41,25 @@ import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.j
       methods: ["GET", "POST"],
       allowedHeaders: ["Authorization", "Content-Type"],
     },
-    ...socketOptimizationConfig,
+    // Connection settings
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    upgradeTimeout: 10000,
+    maxHttpBufferSize: 1024 * 256, // 256KB
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 2 * 60 * 1000,
+      skipMiddlewares: true,
+    },
+    transports: ["websocket", "polling"],
+    allowEIO3: true,
   });
 
-  // Initialize socket connection pool manager
-  const socketPoolManager = new SocketConnectionPoolManager(io);
-  global.socketPoolManager = socketPoolManager;
-
-  // Store for connected admin tokens
+  // Track connected admin tokens
   const connectedAdminTokens = new Map();
 
-  // Making io accessible globally and in controllers
-  global.io = io;
+  // Make io accessible via app
   app.set("io", io);
   app.set("adminTokens", connectedAdminTokens);
-
-  // Setup socket memory management and monitoring
-  setupSocketMemoryManagement(io);
 
   // Socket event handlers
   socketHandlers(io);
@@ -71,9 +67,6 @@ import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.j
   // Database connection followed by Server Start
   connectDB()
     .then(() => {
-      // Monitor database connection pool
-      monitorConnectionPool();
-
       const PORT = process.env.PORT || 8000;
 
       server.listen(PORT, () => {
@@ -94,38 +87,36 @@ import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.j
               : "❌ Not configured"
           }`,
         );
-        console.log(
+        logger.info(
           `🔔 Web Push: ${
             process.env.PUBLIC_VAPID_KEY ? "✅ Configured" : "❌ Not configured"
           }`,
         );
-        console.log(`🔌 Socket.IO server is listening with optimized settings`);
-        console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-        console.log(
-          `⚙️  Rate limiting: ENABLED with per-endpoint optimization`,
-        );
-        console.log(`💾 Memory management: ENABLED`);
-        console.log(`🔄 Connection pooling: ENABLED (25 max connections)`);
+        logger.info("🔌 Socket.IO server is listening with optimized settings");
+        logger.info(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+        logger.info("⚙️  Rate limiting: ENABLED with per-endpoint optimization");
+        logger.info("💾 Memory management: ENABLED");
+        logger.info("🔄 Connection pooling: ENABLED (25 max connections)");
       });
     })
     .catch((err) => {
-      console.error("❌ MongoDB connection error: ", err);
+      logger.error("❌ MongoDB connection error", { error: err.message, stack: err.stack });
       process.exit(1);
     });
 
   // Graceful shutdown
   process.on("SIGTERM", () => {
-    console.log("SIGTERM received. Shutting down gracefully...");
+    logger.info("SIGTERM received. Shutting down gracefully...");
     server.close(() => {
-      console.log("Process terminated");
+      logger.info("Process terminated");
     });
   });
 })();
 
 process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error);
+  logger.error("Uncaught Exception", { error: error.message, stack: error.stack });
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+  logger.error("Unhandled Rejection", { reason: String(reason), promise: String(promise) });
 });

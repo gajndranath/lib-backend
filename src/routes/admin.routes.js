@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   loginAdmin,
   logoutAdmin,
+  refreshAdmin,
   getAdminProfile,
   updateNotificationPreferences,
   registerAdmin,
@@ -14,6 +15,7 @@ import {
 } from "../controllers/admin.controller.js";
 import AdminService from "../services/admin.service.js";
 import { verifyJWT, authorizeRoles } from "../middlewares/auth.middleware.js";
+import { resolveTenant } from "../middlewares/tenant.middleware.js";
 import {
   apiLimiter,
   authLimiter,
@@ -22,6 +24,10 @@ import AnalyticsService from "../services/analytics.service.js";
 import FeeService from "../services/fee.service.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import {
+  forgotPassword,
+  resetPassword,
+} from "../controllers/adminAuth.controller.js";
 
 const router = Router();
 // Student-accessible route: List all admins (no SUPER_ADMIN restriction)
@@ -36,10 +42,14 @@ router.route("/list").get(
 
 // Public Routes
 router.route("/login").post(authLimiter, loginAdmin);
+router.route("/refresh").post(authLimiter, refreshAdmin);
+router.route("/forgot-password").post(authLimiter, forgotPassword);
+router.route("/reset-password/:token").put(authLimiter, resetPassword);
 
 // Protected Routes - Apply rate limiter and auth to all protected routes
 router.use(apiLimiter);
 router.use(verifyJWT);
+router.use(resolveTenant);
 
 router.route("/logout").post(logoutAdmin);
 router.route("/profile").get(getAdminProfile);

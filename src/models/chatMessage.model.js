@@ -121,6 +121,11 @@ const chatMessageSchema = new Schema(
       type: Number,
       default: 0,
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   { timestamps: true },
 );

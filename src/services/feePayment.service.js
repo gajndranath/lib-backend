@@ -12,6 +12,8 @@ import {
   roundFeeAmount,
 } from "../utils/feeHelpers.js";
 import FeeDueService from "./feeDue.service.js";
+import cacheService from "../utils/cache.js";
+import { CACHE_KEYS, CACHE_TTL } from "../utils/cacheStrategy.js";
 
 class FeePaymentService {
   /**
@@ -80,6 +82,13 @@ class FeePaymentService {
       metadata: { studentId, month, year },
     });
 
+    // Invalidate fee caches so next read reflects updated payment status
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT_DUE(studentId.toString())),
+      cacheService.del(CACHE_KEYS.STUDENT(studentId.toString())),
+    ]);
+
     return monthlyFee;
   }
 
@@ -87,69 +96,75 @@ class FeePaymentService {
    * Get student fee summary
    */
   static async getStudentFeeSummary(studentId) {
-    const Student = (await import("../models/student.model.js")).Student;
-    const AdvanceBalance = (await import("../models/advanceBalance.model.js"))
-      .AdvanceBalance;
-    const DueRecord = (await import("../models/dueRecord.model.js")).DueRecord;
+    return cacheService.getOrSet(
+      CACHE_KEYS.STUDENT_FEES(studentId.toString()),
+      async () => {
+        const Student = (await import("../models/student.model.js")).Student;
+        const AdvanceBalance = (await import("../models/advanceBalance.model.js"))
+          .AdvanceBalance;
+        const DueRecord = (await import("../models/dueRecord.model.js")).DueRecord;
 
-    const student = await Student.findById(studentId)
-      .select("name monthlyFee")
-      .lean();
-    if (!student) {
-      throw new ApiError(404, "Student not found");
-    }
+        const student = await Student.findById(studentId)
+          .select("name monthlyFee")
+          .lean();
+        if (!student) {
+          throw new ApiError(404, "Student not found");
+        }
 
-    const monthlyFees = await StudentMonthlyFee.find({ studentId })
-      .select("status amount year month")
-      .sort({ year: -1, month: -1 })
-      .limit(12)
-      .lean();
+        const monthlyFees = await StudentMonthlyFee.find({ studentId })
+          .select("status amount year month")
+          .sort({ year: -1, month: -1 })
+          .limit(12)
+          .lean();
 
-    const advanceBalance = await AdvanceBalance.findOne({ studentId })
-      .select("remainingAmount")
-      .lean();
-    const dueRecord = await DueRecord.findOne({ studentId, resolved: false })
-      .select("totalDueAmount")
-      .lean();
+        const advanceBalance = await AdvanceBalance.findOne({ studentId })
+          .select("remainingAmount")
+          .lean();
+        const dueRecord = await DueRecord.findOne({ studentId, resolved: false })
+          .select("totalDueAmount")
+          .lean();
 
-    const summary = {
-      student: {
-        name: student.name,
-        monthlyFee: student.monthlyFee,
-        status: student.status,
+        const summary = {
+          student: {
+            name: student.name,
+            monthlyFee: student.monthlyFee,
+            status: student.status,
+          },
+          currentMonth: {
+            month: new Date().getMonth(),
+            year: new Date().getFullYear(),
+          },
+          feeHistory: monthlyFees.map((fee) => ({
+            month: fee.month,
+            year: fee.year,
+            baseFee: fee.baseFee,
+            dueCarriedForward: fee.dueCarriedForwardAmount,
+            totalAmount: fee.totalAmount,
+            status: fee.status,
+            paidAmount: fee.paidAmount,
+            paymentDate: fee.paymentDate,
+            coveredByAdvance: fee.coveredByAdvance,
+          })),
+          advance: advanceBalance
+            ? {
+                totalAmount: advanceBalance.totalAmount,
+                remainingAmount: advanceBalance.remainingAmount,
+                usedAmount: advanceBalance.usedAmount,
+              }
+            : null,
+          currentDue: dueRecord
+            ? {
+                totalDueAmount: dueRecord.totalDueAmount,
+                monthsDue: dueRecord.monthsDue,
+                reminderDate: dueRecord.reminderDate,
+              }
+            : null,
+        };
+
+        return summary;
       },
-      currentMonth: {
-        month: new Date().getMonth(),
-        year: new Date().getFullYear(),
-      },
-      feeHistory: monthlyFees.map((fee) => ({
-        month: fee.month,
-        year: fee.year,
-        baseFee: fee.baseFee,
-        dueCarriedForward: fee.dueCarriedForwardAmount,
-        totalAmount: fee.totalAmount,
-        status: fee.status,
-        paidAmount: fee.paidAmount,
-        paymentDate: fee.paymentDate,
-        coveredByAdvance: fee.coveredByAdvance,
-      })),
-      advance: advanceBalance
-        ? {
-            totalAmount: advanceBalance.totalAmount,
-            remainingAmount: advanceBalance.remainingAmount,
-            usedAmount: advanceBalance.usedAmount,
-          }
-        : null,
-      currentDue: dueRecord
-        ? {
-            totalDueAmount: dueRecord.totalDueAmount,
-            monthsDue: dueRecord.monthsDue,
-            reminderDate: dueRecord.reminderDate,
-          }
-        : null,
-    };
-
-    return summary;
+      CACHE_TTL.FEE_SUMMARY,
+    );
   }
 
   /**

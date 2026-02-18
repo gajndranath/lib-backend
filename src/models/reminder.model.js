@@ -64,6 +64,11 @@ const reminderSchema = new Schema(
     lastAttemptAt: {
       type: Date,
     },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -73,7 +78,7 @@ const reminderSchema = new Schema(
 // Index for cron job queries
 reminderSchema.index({ triggerDate: 1, resolved: false });
 reminderSchema.index(
-  { studentId: 1, month: 1, year: 1, type: 1 },
+  { tenantId: 1, studentId: 1, month: 1, year: 1, type: 1 },
   { unique: true }
 );
 

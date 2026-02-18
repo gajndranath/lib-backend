@@ -3,12 +3,15 @@ import { Student } from "../models/student.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { SlotChangeHistory } from "../models/slotChangeHistory.model.js";
 import { ApiError } from "../utils/ApiError.js";
+import cacheService from "../utils/cache.js";
+import { CACHE_KEYS, CACHE_TTL } from "../utils/cacheStrategy.js";
 import {
   getAllSlotsWithOccupancy,
   validateSlotHasCapacity,
   validateSlotChange,
   validateSlotSeatReduction,
 } from "../utils/slotHelpers.js";
+import mongoose from "mongoose";
 
 class SlotService {
   /**
@@ -41,6 +44,9 @@ class SlotService {
 
     // Convert to plain object and return only necessary fields
     const slotObj = slot.toObject();
+
+    // Invalidate the all-slots list cache since a new slot was added
+    await cacheService.del(CACHE_KEYS.ALL_SLOTS);
 
     // Return a clean object without circular references
     return {
@@ -85,6 +91,13 @@ class SlotService {
     Object.assign(slot, updateData);
     await slot.save();
 
+    // Invalidate slot caches
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.SLOT(slotId)),
+      cacheService.del(CACHE_KEYS.SLOT_OCCUPANCY(slotId)),
+      cacheService.del(CACHE_KEYS.ALL_SLOTS),
+    ]);
+
     // Log the action
     await AdminActionLog.create({
       adminId,
@@ -104,74 +117,84 @@ class SlotService {
    * OPTIMIZED: Use aggregation pipeline instead of separate queries
    */
   static async getSlotWithDetails(slotId) {
-    const aggregation = await Slot.aggregate([
-      { $match: { _id: slotId } },
-      {
-        $lookup: {
-          from: "students",
-          let: { slotId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ["$slotId", "$$slotId"] },
-                status: "ACTIVE",
-              },
-            },
-            { $project: { name: 1, phone: 1, seatNumber: 1, joiningDate: 1 } },
-          ],
-          as: "activeStudents",
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          name: 1,
-          timeRange: 1,
-          totalSeats: 1,
-          capacity: {
-            totalSeats: "$totalSeats",
-            occupiedSeats: { $size: "$activeStudents" },
-            availableSeats: {
-              $subtract: ["$totalSeats", { $size: "$activeStudents" }],
-            },
-            occupancyPercentage: {
-              $round: [
+    return cacheService.getOrSet(
+      CACHE_KEYS.SLOT(slotId),
+      async () => {
+        const aggregation = await Slot.aggregate([
+          { $match: { _id: new mongoose.Types.ObjectId(String(slotId)) } },
+          {
+            $lookup: {
+              from: "students",
+              let: { slotId: "$_id" },
+              pipeline: [
                 {
-                  $multiply: [
-                    { $divide: [{ $size: "$activeStudents" }, "$totalSeats"] },
-                    100,
-                  ],
+                  $match: {
+                    $expr: { $eq: ["$slotId", "$$slotId"] },
+                    status: "ACTIVE",
+                  },
                 },
+                { $project: { name: 1, phone: 1, seatNumber: 1, joiningDate: 1 } },
               ],
+              as: "activeStudents",
             },
           },
-          students: "$activeStudents",
-        },
-      },
-    ]);
+          {
+            $project: {
+              _id: 1,
+              name: 1,
+              timeRange: 1,
+              totalSeats: 1,
+              capacity: {
+                totalSeats: "$totalSeats",
+                occupiedSeats: { $size: "$activeStudents" },
+                availableSeats: {
+                  $subtract: ["$totalSeats", { $size: "$activeStudents" }],
+                },
+                occupancyPercentage: {
+                  $round: [
+                    {
+                      $multiply: [
+                        { $divide: [{ $size: "$activeStudents" }, "$totalSeats"] },
+                        100,
+                      ],
+                    },
+                  ],
+                },
+              },
+              students: "$activeStudents",
+            },
+          },
+        ]);
 
-    if (!aggregation || aggregation.length === 0) {
-      throw new ApiError(404, "Slot not found");
-    }
+        if (!aggregation || aggregation.length === 0) {
+          throw new ApiError(404, "Slot not found");
+        }
 
-    const slotData = aggregation[0];
-    return {
-      slot: {
-        _id: slotData._id,
-        name: slotData.name,
-        timeRange: slotData.timeRange,
-        totalSeats: slotData.totalSeats,
+        const slotData = aggregation[0];
+        return {
+          slot: {
+            _id: slotData._id,
+            name: slotData.name,
+            timeRange: slotData.timeRange,
+            totalSeats: slotData.totalSeats,
+          },
+          occupancy: slotData.capacity,
+          students: slotData.students,
+        };
       },
-      occupancy: slotData.capacity,
-      students: slotData.students,
-    };
+      CACHE_TTL.SLOT_DETAILS,
+    );
   }
 
   /**
    * Get all slots with occupancy
    */
   static async getAllSlotsWithOccupancy() {
-    return getAllSlotsWithOccupancy();
+    return cacheService.getOrSet(
+      CACHE_KEYS.ALL_SLOTS,
+      () => getAllSlotsWithOccupancy(),
+      CACHE_TTL.ALL_ACTIVE_SLOTS,
+    );
   }
 
   /**
@@ -198,6 +221,14 @@ class SlotService {
     // Update student
     student.slotId = newSlotId;
     await student.save();
+
+    // Invalidate slot occupancy and student caches
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.SLOT_OCCUPANCY(oldSlot._id.toString())),
+      cacheService.del(CACHE_KEYS.SLOT_OCCUPANCY(newSlotId.toString())),
+      cacheService.del(CACHE_KEYS.ALL_SLOTS),
+      cacheService.del(CACHE_KEYS.STUDENT(studentId.toString())),
+    ]);
 
     // Log the action
     await AdminActionLog.create({
@@ -365,6 +396,14 @@ class SlotService {
     changeRecord.changeType = "STUDENT_APPROVED";
     await changeRecord.save();
 
+    // Invalidate slot occupancy and student caches
+    await Promise.all([
+      cacheService.del(CACHE_KEYS.SLOT_OCCUPANCY(changeRecord.previousSlotId.toString())),
+      cacheService.del(CACHE_KEYS.SLOT_OCCUPANCY(changeRecord.newSlotId.toString())),
+      cacheService.del(CACHE_KEYS.ALL_SLOTS),
+      cacheService.del(CACHE_KEYS.STUDENT(changeRecord.studentId.toString())),
+    ]);
+
     // Log the admin action
     await AdminActionLog.create({
       adminId,
@@ -428,51 +467,6 @@ class SlotService {
     return {
       message: "Slot change request rejected",
     };
-  }
-
-  /**
-   * Override student fee
-   */
-  static async overrideStudentFee(studentId, newMonthlyFee, reason, adminId) {
-    const student = await Student.findById(studentId);
-
-    if (!student) {
-      throw new ApiError(404, "Student not found");
-    }
-
-    // Store old value
-    const oldValue = {
-      monthlyFee: student.monthlyFee,
-      feeOverride: student.feeOverride,
-    };
-
-    // Update student
-    student.monthlyFee = newMonthlyFee;
-    student.feeOverride = true;
-    student.notes = student.notes
-      ? `${
-          student.notes
-        }\nFee overridden on ${new Date().toISOString()}: ${reason}`
-      : `Fee overridden: ${reason}`;
-
-    await student.save();
-
-    // Log the action
-    await AdminActionLog.create({
-      adminId,
-      action: "OVERRIDE_FEE",
-      targetEntity: "STUDENT",
-      targetId: student._id,
-      oldValue: oldValue,
-      newValue: {
-        monthlyFee: newMonthlyFee,
-        feeOverride: true,
-        reason,
-      },
-      metadata: { studentId: student._id },
-    });
-
-    return student;
   }
 }
 

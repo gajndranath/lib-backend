@@ -80,6 +80,13 @@ const adminSchema = new Schema(
     lastActive: { type: Date },
     isActive: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Library",
+      index: true,
+    },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
   },
   { timestamps: true },
 );
@@ -102,6 +109,25 @@ adminSchema.methods.isPasswordCorrect = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
 
+import crypto from "crypto";
+
+// Generate Password Reset Token
+adminSchema.methods.getResetPasswordToken = function () {
+  // Generate token
+  const resetToken = crypto.randomBytes(20).toString("hex");
+
+  // Hash and set to resetPasswordToken
+  this.resetPasswordToken = crypto
+    .createHash("sha256")
+    .update(resetToken)
+    .digest("hex");
+
+  // Set token expire time (e.g., 10 minutes)
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+
+  return resetToken;
+};
+
 // Token Generation Methods
 adminSchema.methods.generateAccessToken = function () {
   return jwt.sign(
@@ -109,7 +135,9 @@ adminSchema.methods.generateAccessToken = function () {
       _id: this._id,
       email: this.email,
       role: this.role,
+      userType: "Admin",
       username: this.username,
+      tenantId: this.tenantId,
     },
     process.env.ACCESS_TOKEN_SECRET,
     { expiresIn: process.env.ACCESS_TOKEN_EXPIRY },

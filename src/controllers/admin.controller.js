@@ -4,6 +4,9 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { Admin } from "../models/admin.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import AdminService from "../services/admin.service.js";
+import StudentService from "../services/student.service.js";
+import { invalidateAdminCache } from "../middlewares/auth.middleware.js";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
 
 // Zod validation schema with stricter rules
@@ -47,21 +50,25 @@ const loginAdmin = asyncHandler(async (req, res) => {
   const isPasswordValid = await admin.isPasswordCorrect(password);
   if (!isPasswordValid) throw new ApiError(401, "Invalid email or password");
 
-  // Check if admin is active
   if (!admin.isActive) throw new ApiError(403, "Admin account is inactive");
 
   const accessToken = admin.generateAccessToken();
+  const refreshToken = admin.generateRefreshToken();
 
-  // Set secure cookie options based on environment
-  const options = {
+  // Save refresh token to DB (hashed storage not needed — it's already a signed JWT)
+  await Admin.findByIdAndUpdate(admin._id, {
+    refreshToken,
+    lastLogin: new Date(),
+  });
+
+  // Force cache invalidation to ensure next request fetches fresh data (e.g. if status changed)
+  await invalidateAdminCache(admin._id.toString());
+
+  const cookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production", // Only secure in production
-    sameSite: "Strict", // Stricter CSRF protection
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
   };
-
-  // Update last login
-  await Admin.findByIdAndUpdate(admin._id, { lastLogin: new Date() });
 
   const adminResponse = await Admin.findById(admin._id).select(
     "-password -refreshToken",
@@ -69,7 +76,8 @@ const loginAdmin = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, options)
+    .cookie("accessToken", accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
+    .cookie("refreshToken", refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
     .json(
       new ApiResponse(
         200,
@@ -253,8 +261,62 @@ const deleteAdmin = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, null, "Admin deleted successfully"));
 });
 
-// NEW FUNCTION: Logout Admin
+// Refresh admin tokens (rotate refresh token)
+const refreshAdmin = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies?.refreshToken || req.body?.refreshToken;
+
+  if (!incomingRefreshToken) {
+    throw new ApiError(401, "Refresh token is required");
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+  } catch {
+    throw new ApiError(401, "Invalid or expired refresh token");
+  }
+
+  // Fetch admin and verify stored token matches (rotation check)
+  const admin = await Admin.findById(decoded._id).select("+refreshToken");
+  if (!admin || admin.refreshToken !== incomingRefreshToken) {
+    throw new ApiError(401, "Refresh token reuse detected or token invalid");
+  }
+
+  if (!admin.isActive) throw new ApiError(403, "Admin account is inactive");
+
+  // Issue new token pair
+  const newAccessToken = admin.generateAccessToken();
+  const newRefreshToken = admin.generateRefreshToken();
+
+  // Rotate: save new refresh token, invalidate old one
+  await Admin.findByIdAndUpdate(admin._id, { refreshToken: newRefreshToken });
+
+  // Invalidate Redis cache so next request fetches fresh admin data
+  await invalidateAdminCache(admin._id.toString());
+
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", newAccessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
+    .cookie("refreshToken", newRefreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
+    .json(new ApiResponse(200, { accessToken: newAccessToken }, "Tokens refreshed"));
+});
+
+// Logout Admin
 const logoutAdmin = asyncHandler(async (req, res) => {
+  // Invalidate the Redis admin cache so the next request hits the DB
+  if (req.admin?._id) {
+    // Clear refresh token from DB
+    await Admin.findByIdAndUpdate(req.admin._id, { refreshToken: null });
+    await invalidateAdminCache(req.admin._id.toString());
+  }
+
   const options = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -264,6 +326,7 @@ const logoutAdmin = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .clearCookie("accessToken", options)
+    .clearCookie("refreshToken", options)
     .json(new ApiResponse(200, null, "Logged out successfully"));
 });
 
@@ -302,6 +365,7 @@ const getAuditLogs = asyncHandler(async (req, res) => {
 export {
   loginAdmin,
   logoutAdmin,
+  refreshAdmin,
   getAdminProfile,
   updateNotificationPreferences,
   registerAdmin,
