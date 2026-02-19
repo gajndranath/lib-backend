@@ -10,25 +10,42 @@ const retryEmailInit = async (maxRetries = 3, delay = 2000) => {
     try {
       console.log(`📧 Email init attempt ${attempt}/${maxRetries}...`);
 
-      const port = parseInt(process.env.EMAIL_PORT || "465");
+      const host = process.env.EMAIL_HOST || process.env.SMTP_HOST;
+      const user = process.env.EMAIL_USER || process.env.SMTP_USER;
+      const pass = process.env.EMAIL_PASSWORD || process.env.SMTP_PASS;
+      const envPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
+
+      const port = parseInt(envPort || "465");
       const isSecure = port === 465;
 
-      transporter = nodemailer.createTransport({
-        host: process.env.EMAIL_HOST,
+      console.log(`📧 Creating transporter: ${host}:${port} (secure: ${isSecure})`);
+
+      const transportConfig = {
+        host: host,
         port: port,
         secure: isSecure,
         auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASSWORD,
+          user: user,
+          pass: pass,
         },
-        connectionTimeout: 20000,
-        greetingTimeout: 20000,
-        socketTimeout: 20000,
+        connectionTimeout: 30000, // Increased timeout
+        greetingTimeout: 30000,
+        socketTimeout: 30000,
         pool: true,
         tls: {
           rejectUnauthorized: false,
+          minVersion: "TLSv1.2"
         },
-      });
+      };
+
+      // ✅ Gmail optimization
+      if (host.includes("gmail.com")) {
+        console.log("📧 Applying Gmail-specific service optimization");
+        transportConfig.service = "gmail";
+        // Gmail service ignores host/port, but secure: true is usually required for SSL
+      }
+
+      transporter = nodemailer.createTransport(transportConfig);
 
       // ✅ Verify with timeout
       const verified = await new Promise((resolve) => {
@@ -84,32 +101,30 @@ const retryEmailInit = async (maxRetries = 3, delay = 2000) => {
 
 export const initializeEmail = async () => {
   try {
-    if (process.env.EMAIL_DISABLED === "true") {
-      console.warn("⚠️ Email service disabled via EMAIL_DISABLED.");
-      emailAvailable = false;
-      return null;
-    }
+    const host = process.env.EMAIL_HOST || process.env.SMTP_HOST;
+    const user = process.env.EMAIL_USER || process.env.SMTP_USER;
+    const pass = process.env.EMAIL_PASSWORD || process.env.SMTP_PASS;
+    const envPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
 
-    if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER) {
+    if (!host || !user || !pass) {
       console.warn(
-        "⚠️ Email configuration not found. Email notifications will be disabled.",
+        "⚠️ Email configuration missing (Host/User/Pass). Email functionality will be disabled.",
       );
       emailAvailable = false;
       return null;
     }
 
     // ✅ Try to initialize with retries
-    const success = await retryEmailInit(3, 2000);
+    await retryEmailInit(3, 3000);
 
-    if (success) {
+    // ✅ FORCE ENABLE if we have a transporter instance
+    // This allows lazy sending even if initial verify timed out
+    if (transporter) {
       emailAvailable = true;
-      console.log("📧 Email service initialized successfully");
+      console.log("📧 Email transporter is active (allowing outbound attempts)");
     } else {
       emailAvailable = false;
-      console.warn(
-        "⚠️ Email service unavailable. Email functionality disabled (will not affect app).",
-      );
-      transporter = null;
+      console.warn("❌ Failed to create email transporter. Outbound emails disabled.");
     }
 
     // ✅ Close on shutdown
@@ -142,10 +157,11 @@ export const getEmailTransporter = () => {
 
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
+    const host = process.env.EMAIL_HOST || process.env.SMTP_HOST;
+    const user = process.env.EMAIL_USER || process.env.SMTP_USER;
+    
     console.log(`📧 sendEmail called: to=${to}, subject="${subject}"`);
-    console.log(
-      `📧 Email config - HOST:${process.env.EMAIL_HOST}, USER:${process.env.EMAIL_USER}`,
-    );
+    console.log(`📧 Config - HOST: ${host}, USER: ${user}`);
 
     if (process.env.EMAIL_DISABLED === "true") {
       console.warn("📧 Email disabled, skipping send:", { to, subject });

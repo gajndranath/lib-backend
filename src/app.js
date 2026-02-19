@@ -52,7 +52,7 @@ app.use(
 // CORS configuration - validate origins
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-  : ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"];
+  : [];
 
 // 2. CORS Options Setup
 const corsOptions = {
