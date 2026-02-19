@@ -1,51 +1,38 @@
-import resend from "../config/email.config.js";
-import { ApiError } from "../utils/ApiError.js";
+import resendInstance from "../config/email.config.js";
 
-export const initializeEmail = async () => {
-  // API mode mein complex verification ki zaroorat nahi hoti
+
+// Iska naam unique rakhein
+export const connectEmailService = async () => {
   console.log("✅ Email service initialized (Resend API mode)");
-  return resend;
+  return resendInstance;
 };
 
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
-    if (process.env.EMAIL_DISABLED === "true") return { success: false, skipped: true };
-
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await resendInstance.emails.send({
       from: 'Gurukal Library <onboarding@resend.dev>',
       to: Array.isArray(to) ? to : [to],
       subject: subject,
       text: text,
-      html: html || `<div style="font-family: sans-serif; padding: 20px;">${text}</div>`,
+      html: html || `<div style="font-family: sans-serif;">${text}</div>`,
     });
 
     if (error) throw error;
-    console.log(`✅ Email sent via Resend API: ${data.id}`);
     return { success: true, messageId: data.id };
   } catch (error) {
-    console.error("❌ Email sending error:", error.message);
+    console.error("❌ Email Error:", error.message);
     return { success: false, error: error.message };
   }
 };
 
 export const sendTemplateEmail = async (to, templateName, data) => {
   const templates = {
-    PAYMENT_REMINDER: {
-      subject: `Payment Reminder - ${data.monthYear}`,
-      text: `Dear ${data.studentName}, your payment of ₹${data.amount} for ${data.monthYear} is pending.`,
-    },
-    PAYMENT_CONFIRMATION: {
-      subject: `Payment Received - ${data.monthYear}`,
-      text: `Dear ${data.studentName}, thank you for your payment of ₹${data.amount}.`,
-    },
     STUDENT_REGISTRATION: {
-      subject: `Welcome to Our Library`,
-      text: `Dear ${data.studentName}, welcome! Your ID is: ${data.studentId}`,
-    },
+      subject: "Welcome to Library",
+      text: `Hi ${data.studentName}, your ID is ${data.studentId}`
+    }
+    // Baaki templates yahan add karein...
   };
-
   const template = templates[templateName];
-  if (!template) throw new ApiError(400, `Template ${templateName} not found`);
-
   return await sendEmail(to, template.subject, template.text);
 };
