@@ -8,6 +8,7 @@ import connectDB from "./config/db.js";
 import { app } from "./app.js";
 import { Server } from "socket.io";
 import http from "http";
+import { initializeEmail } from "./services/email.service.js";
 import { socketHandlers } from "./sockets/index.js";
 import { initializeFirebase } from "./config/firebase.config.js";
 import { initializeEmail } from "./config/email.config.js";
@@ -20,6 +21,8 @@ import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.j
   logger.info("🚀 Server initialization started", {
     env: process.env.NODE_ENV,
   });
+
+  await initializeEmail();
 
   // ✅ Initialize Redis for rate limiting FIRST (after dotenv)
   initRedisForRateLimiting();
