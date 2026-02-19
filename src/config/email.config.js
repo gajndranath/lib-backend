@@ -15,69 +15,56 @@ const retryEmailInit = async (maxRetries = 3, delay = 2000) => {
       const pass = process.env.EMAIL_PASSWORD || process.env.SMTP_PASS;
       const envPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
 
-      const port = parseInt(envPort || "465");
-      const isSecure = port === 465;
-
-      console.log(`📧 Creating transporter: ${host}:${port} (secure: ${isSecure})`);
+      console.log(`📧 Creating transporter for ${user} (Host: ${host})`);
 
       const transportConfig = {
-        host: host,
-        port: port,
-        secure: isSecure,
         auth: {
           user: user,
           pass: pass,
         },
-        connectionTimeout: 30000, // Increased timeout
-        greetingTimeout: 30000,
-        socketTimeout: 30000,
+        connectionTimeout: 60000, // 1 minute connection timeout
+        greetingTimeout: 60000,
+        socketTimeout: 60000,
         pool: true,
+        maxConnections: 3,
+        maxMessages: 100,
+        debug: true,
+        logger: true,
         tls: {
-          rejectUnauthorized: false,
-          minVersion: "TLSv1.2"
+          rejectUnauthorized: false, // Helps with some cloud network cert issues
+          minVersion: "TLSv1.2",
+          servername: host
         },
       };
 
-      // ✅ Gmail optimization
-      if (host.includes("gmail.com")) {
-        console.log("📧 Applying Gmail-specific service optimization");
+      // ✅ Gmail-specific service optimization
+      // When 'service' is used, Nodemailer ignores host/port and handles everything optimally
+      if (host.toLowerCase().includes("gmail.com") || user.toLowerCase().includes("@gmail.com")) {
+        console.log("📧 Using Nodemailer 'gmail' service relay...");
         transportConfig.service = "gmail";
-        // Gmail service ignores host/port, but secure: true is usually required for SSL
+      } else {
+        transportConfig.host = host;
+        transportConfig.port = port;
+        transportConfig.secure = isSecure;
       }
 
       transporter = nodemailer.createTransport(transportConfig);
 
-      // ✅ Verify with timeout
-      const verified = await new Promise((resolve) => {
-        const verifyTimeout = setTimeout(() => {
-          console.warn(
-            `⚠️  Email verification timeout (attempt ${attempt}/${maxRetries})`,
+      // ✅ Async verification (Non-blocking)
+      transporter.verify((error) => {
+        if (error) {
+          console.error(
+            `❌ Email lazy-verification failed (attempt ${attempt}/${maxRetries}):`,
+            error.code || error.message,
           );
-          resolve(false);
-        }, 8000);
-
-        transporter.verify((error) => {
-          clearTimeout(verifyTimeout);
-
-          if (error) {
-            console.error(
-              `❌ Email verification failed (attempt ${attempt}/${maxRetries}):`,
-              error.code || error.message,
-            );
-            resolve(false);
-          } else {
-            console.log(
-              `✅ Email server verified (attempt ${attempt}/${maxRetries})`,
-            );
-            resolve(true);
-          }
-        });
+        } else {
+          console.log(`✅ Email server verified & ready (attempt ${attempt}/${maxRetries})`);
+          emailAvailable = true;
+        }
       });
 
-      if (verified) {
-        emailAvailable = true;
-        return true;
-      }
+      // ✅ Success if transporter is created, even if verify takes longer
+      return true;
 
       if (attempt < maxRetries) {
         console.log(`⏳ Retrying in ${delay}ms...`);
