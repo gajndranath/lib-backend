@@ -7,7 +7,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { Student } from "../models/student.model.js";
 import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
 import FeeService from "../services/fee.service.js";
-import { sendEmail } from "../config/email.config.js";
+import { sendEmail } from "../services/email.service.js";
 import admin from "firebase-admin";
 import { getVapidPublicKey } from "../config/webpush.config.js";
 import { StudentStatus } from "../constants/constants.js";

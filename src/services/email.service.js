@@ -1,22 +1,22 @@
-import resendInstance from "../config/email.config.js";
+import resend from "../config/email.config.js";
+import { ApiError } from "../utils/ApiError.js";
 
-
-// Iska naam unique rakhein
+// Index.js ke liye initialization function
 export const connectEmailService = async () => {
   console.log("✅ Email service initialized (Resend API mode)");
-  return resendInstance;
+  return resend;
 };
 
+// Controllers ke liye send function
 export const sendEmail = async (to, subject, text, html = null) => {
   try {
-    const { data, error } = await resendInstance.emails.send({
+    const { data, error } = await resend.emails.send({
       from: 'Gurukal Library <onboarding@resend.dev>',
       to: Array.isArray(to) ? to : [to],
-      subject: subject,
-      text: text,
+      subject,
+      text,
       html: html || `<div style="font-family: sans-serif;">${text}</div>`,
     });
-
     if (error) throw error;
     return { success: true, messageId: data.id };
   } catch (error) {

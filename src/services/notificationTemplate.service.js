@@ -1,4 +1,4 @@
-import { sendEmail, sendTemplateEmail } from "../config/email.config.js";
+import { sendEmail, sendTemplateEmail } from "../services/email.service.js";
 import NotificationChannelService from "./notificationChannel.service.js";
 
 /**
