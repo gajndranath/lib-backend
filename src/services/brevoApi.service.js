@@ -1,7 +1,7 @@
 // Correct imports based on actual exports
-import { Brevo, BrevoClient, BrevoError } from "@getbrevo/brevo";
+import { BrevoClient, BrevoError } from "@getbrevo/brevo";
 
-let apiInstance = null;
+let client = null;
 let emailAvailable = false;
 
 class BrevoApiService {
@@ -20,15 +20,13 @@ class BrevoApiService {
       }
 
       // Create Brevo client
-      const client = new BrevoClient({
+      client = new BrevoClient({
         apiKey: process.env.BREVO_API_KEY,
       });
 
-      // Get transactional emails API
-      apiInstance = client.transactionalEmails;
-
       // Test the connection by fetching account info
       try {
+        // Try to access account info to verify connection
         const account = await client.account.get();
         console.log(`✅ Connected to Brevo as: ${account.email || "Unknown"}`);
       } catch (testErr) {
@@ -37,7 +35,7 @@ class BrevoApiService {
 
       console.log("✅ Brevo API initialized successfully (v4.x)");
       emailAvailable = true;
-      return apiInstance;
+      return client;
     } catch (error) {
       console.error("❌ Brevo API initialization failed:", error.message);
       emailAvailable = false;
@@ -50,7 +48,7 @@ class BrevoApiService {
    */
   static async sendEmail(to, subject, text, html = null) {
     try {
-      if (!apiInstance || !emailAvailable) {
+      if (!client || !emailAvailable) {
         console.warn("📧 Brevo API not available, skipping send");
         return {
           success: false,
@@ -59,7 +57,7 @@ class BrevoApiService {
         };
       }
 
-      // Prepare email data
+      // Prepare email data according to Brevo v4.x API
       const emailData = {
         sender: {
           name: process.env.EMAIL_FROM_NAME || "Library System",
@@ -78,33 +76,61 @@ class BrevoApiService {
         subject,
         sender: emailData.sender,
         html: !!html,
-        text,
+        text: text.substring(0, 100) + "...",
       });
 
-      // Send email using the API
-      const result = await apiInstance.send(emailData);
+      // Use the correct method - try both possible names
+      let result;
+
+      // Method 1: Using client.transactionalEmails.sendEmail
+      if (
+        client.transactionalEmails &&
+        typeof client.transactionalEmails.sendEmail === "function"
+      ) {
+        console.log("📧 Using client.transactionalEmails.sendEmail");
+        result = await client.transactionalEmails.sendEmail(emailData);
+      }
+      // Method 2: Using client.email.send
+      else if (client.email && typeof client.email.send === "function") {
+        console.log("📧 Using client.email.send");
+        result = await client.email.send(emailData);
+      }
+      // Method 3: Using client.sendTransactionalEmail
+      else if (typeof client.sendTransactionalEmail === "function") {
+        console.log("📧 Using client.sendTransactionalEmail");
+        result = await client.sendTransactionalEmail(emailData);
+      }
+      // Method 4: Using client.sendEmail directly
+      else if (typeof client.sendEmail === "function") {
+        console.log("📧 Using client.sendEmail");
+        result = await client.sendEmail(emailData);
+      } else {
+        // If no method found, log available methods for debugging
+        console.error("❌ No suitable send method found in client");
+        console.log("Available client properties:", Object.keys(client));
+        if (client.transactionalEmails) {
+          console.log(
+            "transactionalEmails methods:",
+            Object.keys(client.transactionalEmails),
+          );
+        }
+        throw new Error("No send method available in Brevo client");
+      }
 
       console.log("✅ [BREVO] Email sent response:", result);
-      if (result.messageId) {
-        console.log(`✅ Email sent successfully via Brevo API v4.x to ${to}`);
-        console.log(`   Message ID: ${result.messageId}`);
-      } else {
-        console.warn("⚠️ [BREVO] No messageId in response:", result);
-      }
 
       return {
         success: true,
-        messageId: result.messageId,
+        messageId: result?.messageId || result?.id || "unknown",
         brevoResponse: result,
       };
     } catch (error) {
       console.error("❌ [BREVO] API error:", {
         message: error.message,
+        stack: error.stack,
         details: error.response?.data || error,
       });
-      if (error.response) {
-        console.error("❌ [BREVO] Full error response:", error.response);
-      }
+
       return {
         success: false,
         error: error.message,
@@ -129,7 +155,6 @@ class BrevoApiService {
       otp,
       purpose,
       subject,
-      text,
     });
 
     const response = await this.sendEmail(email, subject, text, html);

@@ -213,6 +213,9 @@ export const requestEmailOtp = asyncHandler(async (req, res) => {
 export const verifyOtpAndAuthenticate = asyncHandler(async (req, res) => {
   const validation = otpVerifySchema.safeParse(req.body);
   if (!validation.success) {
+    logOtpVerify(req.body?.email, req.body?.otp, "validation_error", {
+      error: validation.error.issues,
+    });
     throw new ApiError(400, "Validation Error", validation.error.issues);
   }
 
@@ -224,18 +227,24 @@ export const verifyOtpAndAuthenticate = asyncHandler(async (req, res) => {
   }).select("+password");
 
   if (!student || !student.otpHash || !student.otpExpiresAt) {
+    logOtpVerify(email, otp, "not_found_or_expired", {
+      studentFound: !!student,
+    });
     throw new ApiError(400, "Invalid or expired OTP");
   }
 
   if (student.otpExpiresAt < new Date()) {
+    logOtpVerify(email, otp, "expired", { expiresAt: student.otpExpiresAt });
     throw new ApiError(400, "OTP expired");
   }
 
   const incomingHash = hashOtp(otp);
   if (incomingHash !== student.otpHash) {
+    logOtpVerify(email, otp, "invalid", { hashMatch: false });
     throw new ApiError(400, "Invalid OTP");
   }
 
+  logOtpVerify(email, otp, "success", { studentId: student._id });
   // ✅ Verify email and activate account (if INACTIVE)
   student.emailVerified = true;
   if (student.status === StudentStatus.INACTIVE) {
