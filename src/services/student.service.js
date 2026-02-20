@@ -108,7 +108,7 @@ class StudentService {
       throw new ApiError(404, "Student not found");
     }
 
-    // Store old values
+    // Store old values for logging
     const oldValues = {
       name: student.name,
       phone: student.phone,
@@ -116,6 +116,9 @@ class StudentService {
       address: student.address,
       fatherName: student.fatherName,
       monthlyFee: student.monthlyFee,
+      status: student.status,
+      emailVerified: student.emailVerified,
+      phoneVerified: student.phoneVerified,
     };
 
     // If changing phone, check for duplicates
@@ -147,8 +150,31 @@ class StudentService {
       await validateSlotHasCapacity(updateData.slotId);
     }
 
-    // Update student
-    Object.assign(student, updateData);
+    // Update student fields
+    // Explicitly handle fields often sent from admin dashboard
+    const updatableFields = [
+      "name",
+      "phone",
+      "email",
+      "address",
+      "fatherName",
+      "slotId",
+      "monthlyFee",
+      "status",
+      "emailVerified",
+      "phoneVerified",
+      "seatNumber",
+      "joiningDate",
+      "notes",
+      "tags",
+    ];
+
+    updatableFields.forEach((field) => {
+      if (updateData[field] !== undefined) {
+        student[field] = updateData[field];
+      }
+    });
+
     await student.save();
 
     // Invalidate student cache
