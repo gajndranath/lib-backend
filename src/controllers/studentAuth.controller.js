@@ -54,7 +54,12 @@ const registerSchema = z.object({
   phone: z.string().regex(/^\d{10}$/), // ✅ Required for student
   address: z.string().optional(),
   fatherName: z.string().optional(),
-  password: z.string().min(6).optional(), // ✅ Optional for dev-mode skip
+  password: z
+    .string()
+    .optional()
+    .refine((val) => !val || val.length >= 6, {
+      message: "Password must be at least 6 characters",
+    }),
 });
 
 const updateProfileSchema = z
