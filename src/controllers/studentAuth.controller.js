@@ -82,12 +82,26 @@ const sendOtpEmail = async (email, otp, purpose) => {
 
   const subject = `Your ${purposeText} code`;
   const text = `Your ${purposeText} OTP is: ${otp}\n\nThis code will expire in ${OTP_EXP_MIN} minutes.`;
-  return await sendEmail(email, subject, text);
+  console.log("\n📧 [OTP SEND] Request:", {
+    email,
+    otp,
+    purpose,
+    subject,
+    text,
+  });
+  const response = await sendEmail(email, subject, text);
+  console.log("📧 [OTP SEND] Email response:", response);
+  return response;
 };
 
 // ========================================
 // STUDENT SELF-REGISTRATION FLOW
 // ========================================
+
+// Add logging for OTP receive/verify
+const logOtpVerify = (email, otp, status, extra = {}) => {
+  console.log("\n📧 [OTP VERIFY] Attempt:", { email, otp, status, ...extra });
+};
 
 export const registerStudent = asyncHandler(async (req, res) => {
   const validation = registerSchema.safeParse(req.body);

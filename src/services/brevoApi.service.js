@@ -73,28 +73,43 @@ class BrevoApiService {
         textContent: text,
       };
 
-      console.log(`📧 Sending via Brevo API v4.x to ${to}...`);
+      console.log("\n📧 [BREVO] Sending email:", {
+        to,
+        subject,
+        sender: emailData.sender,
+        html: !!html,
+        text,
+      });
 
       // Send email using the API
       const result = await apiInstance.send(emailData);
 
-      console.log(`✅ Email sent successfully via Brevo API v4.x to ${to}`);
-      console.log(`   Message ID: ${result.messageId}`);
+      console.log("✅ [BREVO] Email sent response:", result);
+      if (result.messageId) {
+        console.log(`✅ Email sent successfully via Brevo API v4.x to ${to}`);
+        console.log(`   Message ID: ${result.messageId}`);
+      } else {
+        console.warn("⚠️ [BREVO] No messageId in response:", result);
+      }
 
       return {
         success: true,
         messageId: result.messageId,
+        brevoResponse: result,
       };
     } catch (error) {
-      console.error("❌ Brevo API error:", {
+      console.error("❌ [BREVO] API error:", {
         message: error.message,
         details: error.response?.data || error,
       });
-
+      if (error.response) {
+        console.error("❌ [BREVO] Full error response:", error.response);
+      }
       return {
         success: false,
         error: error.message,
         skipped: true,
+        brevoError: error.response?.data || error,
       };
     }
   }
@@ -109,7 +124,17 @@ class BrevoApiService {
     const text = `Your OTP for ${purposeText} is: ${otp}. This code will expire in 10 minutes.`;
     const html = this.#generateOTPHtml(otp, purposeText);
 
-    return this.sendEmail(email, subject, text, html);
+    console.log("\n📧 [BREVO] sendOTP called:", {
+      email,
+      otp,
+      purpose,
+      subject,
+      text,
+    });
+
+    const response = await this.sendEmail(email, subject, text, html);
+    console.log("📧 [BREVO] sendOTP response:", response);
+    return response;
   }
 
   /**
