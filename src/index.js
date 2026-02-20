@@ -13,7 +13,7 @@ import { initializeFirebase } from "./config/firebase.config.js";
 import { initializeWebPush } from "./config/webpush.config.js";
 import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
 import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.js";
-import { connectEmailService } from "./services/email.service.js";
+import { initializeEmail } from "./config/email.config.js";
 // Initialize notification services
 (async () => {
   logger.info("🚀 Server initialization started", {
@@ -22,11 +22,9 @@ import { connectEmailService } from "./services/email.service.js";
 
   // ✅ Initialize Redis for rate limiting FIRST (after dotenv)
   initRedisForRateLimiting();
-
-  initializeFirebase();// ✅ Await email initialization with retries
+  await initializeEmail();
+  initializeFirebase(); // ✅ Await email initialization with retries
   initializeWebPush();
-
-  await connectEmailService();
 
   // Continue with server setup
   const server = http.createServer(app);
@@ -94,13 +92,18 @@ import { connectEmailService } from "./services/email.service.js";
         );
         logger.info("🔌 Socket.IO server is listening with optimized settings");
         logger.info(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-        logger.info("⚙️  Rate limiting: ENABLED with per-endpoint optimization");
+        logger.info(
+          "⚙️  Rate limiting: ENABLED with per-endpoint optimization",
+        );
         logger.info("💾 Memory management: ENABLED");
         logger.info("🔄 Connection pooling: ENABLED (25 max connections)");
       });
     })
     .catch((err) => {
-      logger.error("❌ MongoDB connection error", { error: err.message, stack: err.stack });
+      logger.error("❌ MongoDB connection error", {
+        error: err.message,
+        stack: err.stack,
+      });
       process.exit(1);
     });
 
@@ -114,9 +117,15 @@ import { connectEmailService } from "./services/email.service.js";
 })();
 
 process.on("uncaughtException", (error) => {
-  logger.error("Uncaught Exception", { error: error.message, stack: error.stack });
+  logger.error("Uncaught Exception", {
+    error: error.message,
+    stack: error.stack,
+  });
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  logger.error("Unhandled Rejection", { reason: String(reason), promise: String(promise) });
+  logger.error("Unhandled Rejection", {
+    reason: String(reason),
+    promise: String(promise),
+  });
 });

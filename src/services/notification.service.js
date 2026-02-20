@@ -1,4 +1,4 @@
-import { sendEmail } from "../services/email.service.js";
+import { sendEmail } from "../config/email.config.js";
 import { ApiError } from "../utils/ApiError.js";
 import NotificationChannelService from "./notificationChannel.service.js";
 import NotificationTemplateService from "./notificationTemplate.service.js";

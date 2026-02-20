@@ -3,7 +3,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Admin } from "../models/admin.model.js";
-import { sendEmail } from "../services/email.service.js";
+import { sendEmail } from "../config/email.config.js";
+
 /**
  * @desc    Forgot Password - Send reset link
  * @route   POST /api/v1/admin/forgot-password
