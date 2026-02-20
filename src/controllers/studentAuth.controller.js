@@ -54,6 +54,7 @@ const registerSchema = z.object({
   phone: z.string().regex(/^\d{10}$/), // ✅ Required for student
   address: z.string().optional(),
   fatherName: z.string().optional(),
+  password: z.string().min(6).optional(), // ✅ Optional for dev-mode skip
 });
 
 const updateProfileSchema = z
@@ -110,7 +111,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Validation Error", validation.error.errors);
   }
 
-  const { name, email, phone, address, fatherName } = validation.data;
+  const { name, email, phone, address, fatherName, password } = validation.data;
 
   // ✅ Check email uniqueness
   const existingEmail = await checkEmailExists(email);
@@ -153,6 +154,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
     fatherName,
     status: StudentStatus.INACTIVE,
     emailVerified,
+    password, // ✅ Will be hashed by model pre-save hook
     otpHash,
     otpExpiresAt,
     otpPurpose,
