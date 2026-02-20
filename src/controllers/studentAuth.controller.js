@@ -136,7 +136,10 @@ export const registerStudent = asyncHandler(async (req, res) => {
   // ENV-based email verification logic
   let emailVerified = false;
   let otp, otpHash, otpExpiresAt, otpPurpose;
-  if (process.env.NODE_ENV === "development") {
+  if (
+    process.env.NODE_ENV === "development" ||
+    process.env.DEV_MODE_REGISTRATION === "true"
+  ) {
     emailVerified = true;
     console.log(
       "[DEV] Skipping email OTP verification, setting emailVerified: true",
@@ -167,7 +170,10 @@ export const registerStudent = asyncHandler(async (req, res) => {
   });
 
   // Only send OTP in production
-  if (process.env.NODE_ENV !== "development") {
+  if (
+    process.env.NODE_ENV !== "development" &&
+    process.env.DEV_MODE_REGISTRATION !== "true"
+  ) {
     const emailResult = await sendOtpEmail(email, otp, "VERIFY");
     if (emailResult?.success) {
       console.log(`✅ Verification email sent to ${email}`);
@@ -176,15 +182,23 @@ export const registerStudent = asyncHandler(async (req, res) => {
     }
   }
 
+  const isDevShortcut =
+    process.env.NODE_ENV === "development" ||
+    process.env.DEV_MODE_REGISTRATION === "true";
+
   return res.status(201).json(
     new ApiResponse(
       201,
       {
         email: student.email,
         libraryId: student.libraryId,
-        message: "Check your email for verification code",
+        message: isDevShortcut
+          ? "Account created successfully (Dev Shortcut)"
+          : "Check your email for verification code",
       },
-      "Registration successful. Please verify your email.",
+      isDevShortcut
+        ? "Registration successful."
+        : "Registration successful. Please verify your email.",
     ),
   );
 });
