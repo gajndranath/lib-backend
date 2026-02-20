@@ -154,7 +154,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
     fatherName,
     status: StudentStatus.INACTIVE,
     emailVerified,
-    password, // ✅ Will be hashed by model pre-save hook
+    ...(password && { password }), // ✅ Only include password if provided (Dev mode)
     otpHash,
     otpExpiresAt,
     otpPurpose,
