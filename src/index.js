@@ -14,7 +14,6 @@ import { initializeWebPush } from "./config/webpush.config.js";
 import "./jobs/reminder.job.js"; // IMPORTING CRON JOB TO ACTIVATE IT
 import { initRedisForRateLimiting } from "./middlewares/rateLimiter.middleware.js";
 import { initializeEmail } from "./config/email.config.js";
-import BrevoApiService from "./services/brevoApi.service.js";
 // Initialize notification services
 (async () => {
   logger.info("🚀 Server initialization started", {
@@ -24,7 +23,6 @@ import BrevoApiService from "./services/brevoApi.service.js";
   // ✅ Initialize Redis for rate limiting FIRST (after dotenv)
   initRedisForRateLimiting();
   await initializeEmail();
-  await BrevoApiService.initialize();
   initializeFirebase(); // ✅ Await email initialization with retries
   initializeWebPush();
 

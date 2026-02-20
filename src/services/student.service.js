@@ -43,12 +43,22 @@ class StudentService {
       // ✅ Generate library ID
       const libraryId = await generateLibraryId();
 
+      // ENV-based email verification logic
+      let emailVerified = false;
+      if (process.env.NODE_ENV === "development") {
+        emailVerified = true;
+        // Optionally log skipping OTP/email verification
+        console.log(
+          "[DEV] Skipping email OTP verification, setting emailVerified: true",
+        );
+      }
+
       // ✅ Create student
       const student = await Student.create({
         ...studentData,
         libraryId,
         createdBy: adminId,
-        emailVerified: false, // Admin can verify later or student verifies via OTP
+        emailVerified,
       });
 
       // ✅ Generate initial fee record for current month
@@ -341,7 +351,10 @@ class StudentService {
     const student = await Student.findById(studentId);
     if (!student) throw new ApiError(404, "Student not found");
 
-    const oldValue = { monthlyFee: student.monthlyFee, feeOverride: student.feeOverride };
+    const oldValue = {
+      monthlyFee: student.monthlyFee,
+      feeOverride: student.feeOverride,
+    };
 
     student.monthlyFee = newMonthlyFee;
     student.feeOverride = true;

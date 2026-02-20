@@ -82,15 +82,16 @@ const sendOtpEmail = async (email, otp, purpose) => {
 
   const subject = `Your ${purposeText} code`;
   const text = `Your ${purposeText} OTP is: ${otp}\n\nThis code will expire in ${OTP_EXP_MIN} minutes.`;
-  console.log("\n📧 [OTP SEND] Request:", {
-    email,
+  console.log("\n🚀 [OTP SEND] Sending OTP:", {
+    to: email,
     otp,
     purpose,
     subject,
     text,
+    time: new Date().toISOString(),
   });
   const response = await sendEmail(email, subject, text);
-  console.log("📧 [OTP SEND] Email response:", response);
+  console.log("✅ [OTP SEND] Email sent. Response:", response);
   return response;
 };
 
@@ -126,6 +127,22 @@ export const registerStudent = asyncHandler(async (req, res) => {
   // ✅ Generate library ID
   const libraryId = await generateLibraryId();
 
+  // ENV-based email verification logic
+  let emailVerified = false;
+  let otp, otpHash, otpExpiresAt, otpPurpose;
+  if (process.env.NODE_ENV === "development") {
+    emailVerified = true;
+    console.log(
+      "[DEV] Skipping email OTP verification, setting emailVerified: true",
+    );
+  } else {
+    // Production: require OTP/email verification
+    otp = generateOtp();
+    otpHash = hashOtp(otp);
+    otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
+    otpPurpose = "VERIFY";
+  }
+
   // ✅ Create student (INACTIVE until verified)
   const student = await Student.create({
     libraryId,
@@ -135,24 +152,21 @@ export const registerStudent = asyncHandler(async (req, res) => {
     address,
     fatherName,
     status: StudentStatus.INACTIVE,
-    emailVerified: false,
+    emailVerified,
+    otpHash,
+    otpExpiresAt,
+    otpPurpose,
     tenantId: req.tenantId, // Capture tenantId from header/subdomain
   });
 
-  // ✅ Generate and save OTP
-  const otp = generateOtp();
-  student.otpHash = hashOtp(otp);
-  student.otpExpiresAt = new Date(Date.now() + OTP_EXP_MIN * 60 * 1000);
-  student.otpPurpose = "VERIFY";
-  await student.save({ validateBeforeSave: false });
-
-  // ✅ Send verification email
-  const emailResult = await sendOtpEmail(email, otp, "VERIFY");
-
-  if (emailResult?.success) {
-    console.log(`✅ Verification email sent to ${email}`);
-  } else {
-    console.warn(`⚠️ Failed to send verification email to ${email}`);
+  // Only send OTP in production
+  if (process.env.NODE_ENV !== "development") {
+    const emailResult = await sendOtpEmail(email, otp, "VERIFY");
+    if (emailResult?.success) {
+      console.log(`✅ Verification email sent to ${email}`);
+    } else {
+      console.warn(`⚠️ Failed to send verification email to ${email}`);
+    }
   }
 
   return res.status(201).json(
