@@ -16,26 +16,26 @@ const retryEmailInit = async (maxRetries = 3, delay = 3000) => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`📧 Email init attempt ${attempt}/${maxRetries}...`);
-      
+
       const transportConfig = {
         service: "gmail",
         host: host,
-        port: 465, // Port 465 is more stable on Render for Gmail
-        secure: true, 
+        port: 587, // Port 465 is more stable on Render for Gmail
+        secure: false, // Use secure: false for port 587
         auth: {
           user: user,
           pass: pass.replace(/\s+/g, ""), // Automatically removes any spaces
         },
         pool: true,
         maxConnections: 3,
-        connectionTimeout: 20000, 
+        connectionTimeout: 20000,
         greetingTimeout: 20000,
         socketTimeout: 30000,
         debug: true,
         logger: true,
         tls: {
           rejectUnauthorized: false, // Prevents certificate handshake issues in cloud environments
-          servername: host
+          servername: host,
         },
       };
 
@@ -49,14 +49,15 @@ const retryEmailInit = async (maxRetries = 3, delay = 3000) => {
         });
       });
 
-      console.log(`✅ Email server verified & ready (attempt ${attempt}/${maxRetries})`);
+      console.log(
+        `✅ Email server verified & ready (attempt ${attempt}/${maxRetries})`,
+      );
       emailAvailable = true;
       return true; // Success!
-
     } catch (error) {
       console.error(
         `❌ Email init failed (attempt ${attempt}/${maxRetries}):`,
-        error.code || error.message
+        error.code || error.message,
       );
 
       if (attempt < maxRetries) {
@@ -77,7 +78,7 @@ export const initializeEmail = async () => {
   if (transporter && emailAvailable) {
     return transporter;
   }
-  
+
   // If initialization is in progress, wait for it
   if (initializationPromise) {
     return initializationPromise;
@@ -88,7 +89,9 @@ export const initializeEmail = async () => {
     const pass = process.env.EMAIL_PASSWORD || "bkmyiwqnhpobedto";
 
     if (!user || !pass) {
-      console.warn("⚠️ Email configuration missing. Email functionality disabled.");
+      console.warn(
+        "⚠️ Email configuration missing. Email functionality disabled.",
+      );
       return null;
     }
 
@@ -124,12 +127,14 @@ export const sendEmail = async (to, subject, text, html = null) => {
 
     // Ensure transporter is initialized
     let mailTransporter = getEmailTransporter();
-    
+
     // If not initialized, try to initialize now
     if (!mailTransporter) {
-      console.log("📧 Transporter not initialized, attempting to initialize now...");
+      console.log(
+        "📧 Transporter not initialized, attempting to initialize now...",
+      );
       mailTransporter = await initializeEmail();
-      
+
       if (!mailTransporter) {
         throw new Error("Failed to initialize email transporter");
       }
@@ -140,7 +145,9 @@ export const sendEmail = async (to, subject, text, html = null) => {
       to: Array.isArray(to) ? to.join(", ") : to,
       subject: subject,
       text: text,
-      html: html || `
+      html:
+        html ||
+        `
         <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
           <h2 style="color: #4f46e5;">Gurukal Library</h2>
           <p style="white-space: pre-wrap;">${text}</p>
@@ -159,15 +166,15 @@ export const sendEmail = async (to, subject, text, html = null) => {
       message: error.message,
       code: error.code,
       command: error.command,
-      response: error.response
+      response: error.response,
     });
-    
+
     // If error is due to transporter, reset it
-    if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT') {
+    if (error.code === "ECONNECTION" || error.code === "ETIMEDOUT") {
       transporter = null;
       emailAvailable = false;
     }
-    
+
     return { success: false, error: error.message };
   }
 };

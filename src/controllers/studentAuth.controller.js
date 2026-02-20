@@ -260,8 +260,14 @@ export const verifyOtpAndAuthenticate = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
-    .cookie("refreshToken", refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
+    .cookie("accessToken", accessToken, {
+      ...cookieOptions,
+      maxAge: 24 * 60 * 60 * 1000,
+    })
+    .cookie("refreshToken", refreshToken, {
+      ...cookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    })
     .json(
       new ApiResponse(
         200,
@@ -314,8 +320,14 @@ export const loginStudent = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
-    .cookie("refreshToken", refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
+    .cookie("accessToken", accessToken, {
+      ...cookieOptions,
+      maxAge: 24 * 60 * 60 * 1000,
+    })
+    .cookie("refreshToken", refreshToken, {
+      ...cookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    })
     .json(
       new ApiResponse(
         200,
@@ -357,7 +369,10 @@ export const refreshStudent = asyncHandler(async (req, res) => {
 
   let decoded;
   try {
-    decoded = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+    decoded = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+    );
   } catch {
     throw new ApiError(401, "Invalid or expired refresh token");
   }
@@ -384,7 +399,9 @@ export const refreshStudent = asyncHandler(async (req, res) => {
   const newRefreshToken = student.generateRefreshToken();
 
   // Rotate: save new refresh token
-  await Student.findByIdAndUpdate(student._id, { refreshToken: newRefreshToken });
+  await Student.findByIdAndUpdate(student._id, {
+    refreshToken: newRefreshToken,
+  });
 
   const cookieOptions = {
     httpOnly: true,
@@ -394,9 +411,17 @@ export const refreshStudent = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", newAccessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 })
-    .cookie("refreshToken", newRefreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 })
-    .json(new ApiResponse(200, { accessToken: newAccessToken }, "Tokens refreshed"));
+    .cookie("accessToken", newAccessToken, {
+      ...cookieOptions,
+      maxAge: 24 * 60 * 60 * 1000,
+    })
+    .cookie("refreshToken", newRefreshToken, {
+      ...cookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    })
+    .json(
+      new ApiResponse(200, { accessToken: newAccessToken }, "Tokens refreshed"),
+    );
 });
 
 export const requestPasswordReset = asyncHandler(async (req, res) => {
@@ -528,10 +553,11 @@ export const updateStudentProfile = asyncHandler(async (req, res) => {
 
 export const getStudentDashboard = asyncHandler(async (req, res) => {
   const { Student } = await import("../models/student.model.js");
-    await import("../models/slot.model.js");
-    await import("../models/studentMonthlyFee.model.js");
-    const { Announcement } = await import("../models/announcement.model.js");
-    const Notification = (await import("../models/notification.model.js")).default;
+  await import("../models/slot.model.js");
+  await import("../models/studentMonthlyFee.model.js");
+  const { Announcement } = await import("../models/announcement.model.js");
+  const Notification = (await import("../models/notification.model.js"))
+    .default;
   const studentDoc = await Student.findById(req.student._id)
     .populate({
       path: "slotId",
@@ -547,32 +573,40 @@ export const getStudentDashboard = asyncHandler(async (req, res) => {
 
   const studentId = studentDoc._id;
 
-  const [feeSummary, recentPayments, dueItems, unreadNotifications, announcements] =
-    await Promise.all([
-      FeeService.getStudentFeeSummary(studentId),
-      StudentMonthlyFee.find({ studentId, status: "PAID" })
-        .sort({ paymentDate: -1, createdAt: -1 })
-        .limit(6)
-        .lean(),
-      StudentMonthlyFee.find({ studentId, status: "DUE" })
-        .sort({ year: -1, month: -1 })
-        .limit(3)
-        .lean(),
-      Notification.find({ userId: studentId, read: false })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean(),
-      Announcement.find({
-        $or: [
-          { targetScope: "ALL_STUDENTS" },
-          { targetScope: "SLOT", slotId: studentDoc.slotId?._id || studentDoc.slotId },
-          { targetScope: "SPECIFIC_STUDENTS", recipientIds: studentId },
-        ],
-      })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean(),
-    ]);
+  const [
+    feeSummary,
+    recentPayments,
+    dueItems,
+    unreadNotifications,
+    announcements,
+  ] = await Promise.all([
+    FeeService.getStudentFeeSummary(studentId),
+    StudentMonthlyFee.find({ studentId, status: "PAID" })
+      .sort({ paymentDate: -1, createdAt: -1 })
+      .limit(6)
+      .lean(),
+    StudentMonthlyFee.find({ studentId, status: "DUE" })
+      .sort({ year: -1, month: -1 })
+      .limit(3)
+      .lean(),
+    Notification.find({ userId: studentId, read: false })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean(),
+    Announcement.find({
+      $or: [
+        { targetScope: "ALL_STUDENTS" },
+        {
+          targetScope: "SLOT",
+          slotId: studentDoc.slotId?._id || studentDoc.slotId,
+        },
+        { targetScope: "SPECIFIC_STUDENTS", recipientIds: studentId },
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean(),
+  ]);
 
   // Build a full student profile object for dashboard (all personal fields)
   const student = {
@@ -980,10 +1014,12 @@ export const downloadPaymentReceiptPDF = asyncHandler(async (req, res) => {
 // Get available slots for student selection
 export const getAvailableSlots = asyncHandler(async (_req, res) => {
   const { Slot } = await import("../models/slot.model.js");
-  
+
   const slots = await Slot.find({ isActive: true })
     .select("name timeRange monthlyFee totalSeats")
     .lean();
 
-  return res.status(200).json(new ApiResponse(200, slots, "Available slots fetched"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, slots, "Available slots fetched"));
 });

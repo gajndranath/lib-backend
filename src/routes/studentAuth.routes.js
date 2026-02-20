@@ -40,14 +40,26 @@ import {
 const router = Router();
 
 // Public student auth routes - with rate limiting
-router.route("/register").post(authLimiter, resolveTenantOptional, registerStudent);
-router.route("/request-otp").post(otpLimiter, resolveTenantOptional, requestEmailOtp);
-router.route("/verify-otp").post(otpLimiter, resolveTenantOptional, verifyOtpAndAuthenticate);
+router
+  .route("/register")
+  .post(authLimiter, resolveTenantOptional, registerStudent);
+router
+  .route("/request-otp")
+  .post(otpLimiter, resolveTenantOptional, requestEmailOtp);
+router
+  .route("/verify-otp")
+  .post(otpLimiter, resolveTenantOptional, verifyOtpAndAuthenticate);
 router.route("/login").post(authLimiter, resolveTenantOptional, loginStudent);
 router.route("/logout").post(verifyStudentJWT, logoutStudent);
-router.route("/refresh").post(authLimiter, resolveTenantOptional, refreshStudent);
-router.route("/forgot-password/request").post(otpLimiter, resolveTenantOptional, requestPasswordReset);
-router.route("/forgot-password/reset").post(otpLimiter, resolveTenantOptional, resetPassword);
+router
+  .route("/refresh")
+  .post(authLimiter, resolveTenantOptional, refreshStudent);
+router
+  .route("/forgot-password/request")
+  .post(otpLimiter, resolveTenantOptional, requestPasswordReset);
+router
+  .route("/forgot-password/reset")
+  .post(otpLimiter, resolveTenantOptional, resetPassword);
 
 // Protected student routes
 router.use(verifyStudentJWT);
