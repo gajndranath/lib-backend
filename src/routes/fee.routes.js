@@ -57,7 +57,7 @@ router
   .route("/overdue-summary/export")
   .get(
     authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
-    require("../controllers/student.controller.js").exportOverdueSummaryCSV,
+    exportOverdueSummaryCSV,
   );
 
 // Protected routes for Admin and Super Admin
