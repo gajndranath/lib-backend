@@ -240,6 +240,59 @@ class FeeDueService {
 
     return reminder;
   }
+
+  static async recalculateAllCF(studentId, adminId = null) {
+    // If no adminId is provided (e.g. during a system automated cascade), 
+    // find a system admin (the first SUPER_ADMIN) to attribute the changes to.
+    if (!adminId || adminId === "65d1a8f9f1b2c3d4e5f6a8b7") {
+      const { Admin } = await import("../models/admin.model.js");
+      const systemAdmin = await Admin.findOne({ role: "SUPER_ADMIN" }).sort({ createdAt: 1 });
+      adminId = systemAdmin ? systemAdmin._id : adminId;
+    }
+
+    // 1. Fetch all fees sorted by date
+    const fees = await StudentMonthlyFee.find({ studentId }).sort({ year: 1, month: 1 });
+    
+    let currentDueBalance = 0;
+    
+    for (const fee of fees) {
+      // Set the carry forward for THIS month based on previous month's balance
+      if (fee.dueCarriedForwardAmount !== currentDueBalance) {
+        fee.dueCarriedForwardAmount = currentDueBalance;
+        await fee.save();
+      }
+      
+      // Calculate what carries forward to the NEXT month
+      const total = fee.baseFee + fee.dueCarriedForwardAmount;
+      currentDueBalance = Math.max(0, roundFeeAmount(total - (fee.paidAmount || 0)));
+    }
+    
+    // Also sync the DueRecord
+    const dueRecord = await DueRecord.findOne({ studentId, resolved: false });
+    if (dueRecord) {
+      await this._syncTotalDue(dueRecord);
+    }
+
+    // NEW POLICY: Apply Advance to future PENDING/DUE if available
+    // (This helps resolve the ledger automatically when an overpayment happens in the past)
+    const FeeAdvanceService = (await import("./feeAdvance.service.js")).default;
+    for (const fee of fees) {
+      if (fee.status !== "PAID") {
+         const currentTotal = fee.baseFee + fee.dueCarriedForwardAmount;
+         if (currentTotal > 0) {
+            await FeeAdvanceService.applyAdvanceIfAvailable(
+              studentId, 
+              fee.month, 
+              fee.year, 
+              currentTotal, 
+              adminId
+            );
+         }
+      }
+    }
+    
+    return currentDueBalance;
+  }
 }
 
 export default FeeDueService;

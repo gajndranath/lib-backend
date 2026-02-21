@@ -11,6 +11,13 @@ const slotSchema = new Schema(
       start: { type: String, required: true }, // Format: "09:00"
       end: { type: String, required: true },
     },
+    slotType: {
+      type: String,
+      enum: ["FULL_DAY", "PARTIAL"],
+      default: "PARTIAL",
+      required: true,
+    },
+
     monthlyFee: {
       type: Number,
       required: true,
@@ -42,6 +49,13 @@ const slotSchema = new Schema(
       ref: "Library",
       index: true,
     },
+    roomId: {
+      type: Schema.Types.ObjectId,
+      ref: "Room",
+      required: true,
+      index: true,
+    },
+
   },
   {
     timestamps: true,
@@ -69,3 +83,4 @@ slotSchema.index({ tenantId: 1, isActive: 1 });
 slotSchema.index({ isActive: 1, totalSeats: 1 });
 
 export const Slot = mongoose.model("Slot", slotSchema);
+

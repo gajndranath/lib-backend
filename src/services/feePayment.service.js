@@ -12,6 +12,7 @@ import {
   roundFeeAmount,
 } from "../utils/feeHelpers.js";
 import FeeDueService from "./feeDue.service.js";
+import FeeAdvanceService from "./feeAdvance.service.js";
 import cacheService from "../utils/cache.js";
 import { CACHE_KEYS, CACHE_TTL } from "../utils/cacheStrategy.js";
 
@@ -38,6 +39,23 @@ class FeePaymentService {
     }
 
     const paidAmount = roundFeeAmount(paymentData.paidAmount);
+
+    // ADVANCE HANDLING: If Paying via Advance, we must deduct from the balance
+    if (paymentData.paymentMethod === "ADVANCE") {
+      const { AdvanceBalance } = await import("../models/advanceBalance.model.js");
+      const advanceBalance = await AdvanceBalance.findOne({ studentId });
+      
+      if (!advanceBalance || advanceBalance.remainingAmount < paidAmount) {
+        throw new ApiError(400, `Insufficient advance balance. Available: ₹${advanceBalance?.remainingAmount || 0}`);
+      }
+
+      // Deduct from advance balance
+      await advanceBalance.applyToMonth(month, year, paidAmount);
+      // Mark fee as basically "covered by advance" even if it was manually triggered
+      if (paidAmount >= monthlyFee.totalAmount) {
+        monthlyFee.coveredByAdvance = true;
+      }
+    }
 
     // Use model method to record payment (handles status and locking)
     await monthlyFee.recordPayment({
@@ -120,6 +138,9 @@ class FeePaymentService {
       cacheService.del(CACHE_KEYS.STUDENT(studentId.toString())),
     ]);
 
+    // CASCADE COMPREHENSION: Recalculate all future carry-forwards to ensure ledger consistency
+    await FeeDueService.recalculateAllCF(studentId);
+
     return monthlyFee;
   }
 
@@ -155,12 +176,16 @@ class FeePaymentService {
           .select("totalDueAmount monthsDue reminderDate")
           .lean();
 
-        // Aggregate totals
+        // Aggregate totals: Avoid double-counting carry-forwards. 
+        // The LATEST month's totalAmount - paidAmount represents the entire history.
         const totalPaid = monthlyFees.reduce((sum, fee) => sum + (fee.paidAmount || 0), 0);
-        const totalPending = monthlyFees
-          .filter(fee => fee.status === 'PENDING')
-          .reduce((sum, fee) => sum + (fee.baseFee + (fee.dueCarriedForwardAmount || 0)), 0);
+        
+        // Find the absolute latest fee record to get the true total outstanding
+        const latestFee = monthlyFees[monthlyFees.length - 1];
+        const totalOutstanding = latestFee ? (latestFee.totalAmount - (latestFee.paidAmount || 0)) : 0;
+        
         const totalDue = dueRecord ? dueRecord.totalDueAmount : 0;
+        const totalPending = Math.max(0, Math.round((totalOutstanding - totalDue) * 100) / 100);
 
         const summary = {
           student: {

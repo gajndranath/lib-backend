@@ -77,7 +77,7 @@ export const validateSlotChange = (currentSlotId, newSlotId) => {
  * @returns {Promise<Array>} Array of slots with occupancy info
  */
 export const getAllSlotsWithOccupancy = async () => {
-  const slots = await Slot.find({ isActive: true }).lean();
+  const slots = await Slot.find().populate("roomId", "name").lean();
 
   const slotsWithOccupancy = await Promise.all(
     slots.map(async (slot) => {

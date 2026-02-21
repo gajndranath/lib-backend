@@ -130,6 +130,7 @@ import reminderRouter from "./routes/reminder.routes.js";
 import libraryRouter from "./routes/library.routes.js";
 import expenseRouter from "./routes/expense.routes.js";
 import attendanceRouter from "./routes/attendance.routes.js";
+import roomRouter from "./routes/room.routes.js";
 
 // Register routes
 app.use("/api/v1/students", studentRouter);
@@ -141,11 +142,13 @@ app.use("/api/v1/student-chat", studentChatRouter);
 app.use("/api/v1/announcements", announcementRouter);
 app.use("/api/v1/student-announcements", studentAnnouncementRouter);
 app.use("/api/v1/slots", slotRouter);
+app.use("/api/v1/rooms", roomRouter);
 app.use("/api/v1/fees", feeRouter);
 app.use("/api/v1/reminders", reminderRouter);
 app.use("/api/v1/library", libraryRouter);
 app.use("/api/v1/expenses", expenseRouter);
 app.use("/api/v1/attendance", attendanceRouter);
+
 
 // Health check - minimal info
 app.get("/health", (req, res) => {

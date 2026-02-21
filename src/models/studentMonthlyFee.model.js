@@ -63,7 +63,7 @@ const studentMonthlyFeeSchema = new Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["CASH", "ONLINE", "CHEQUE", "OTHER"],
+      enum: ["CASH", "ONLINE", "CHEQUE", "OTHER", "UPI", "ADVANCE"],
       trim: true,
     },
     transactionId: {

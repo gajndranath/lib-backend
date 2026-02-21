@@ -1,5 +1,7 @@
 import { Slot } from "../models/slot.model.js";
+import { Room } from "../models/room.model.js";
 import { Student } from "../models/student.model.js";
+
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { SlotChangeHistory } from "../models/slotChangeHistory.model.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -18,7 +20,13 @@ class SlotService {
    * Create new slot
    */
   static async createSlot(slotData, adminId) {
+    const { roomId } = slotData;
+    if (!roomId) {
+      throw new ApiError(400, "Room ID is required to create a slot");
+    }
+
     // Validate time format
+
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
     if (
       !timeRegex.test(slotData.timeRange.start) ||
@@ -113,7 +121,89 @@ class SlotService {
   }
 
   /**
+   * Get seat chart for a specific slot
+   * Handles cross-shift blocking for Full Day assignments
+   */
+  static async getSeatChart(slotId) {
+    const slot = await Slot.findById(slotId).populate("roomId");
+    if (!slot) {
+      throw new ApiError(404, "Slot not found");
+    }
+
+    const room = slot.roomId;
+    if (!room) {
+      throw new ApiError(404, "Room not found for this slot");
+    }
+
+    // 1. Get all active students in THIS slot
+    const slotStudents = await Student.find({
+      slotId,
+      status: "ACTIVE",
+      isDeleted: false,
+    }).select("name seatNumber");
+
+    // 2. If this is a PARTIAL slot, also get students in the FULL_DAY slot for the same room
+    let blockedByFullDay = [];
+    if (slot.slotType === "PARTIAL") {
+      const fullDaySlots = await Slot.find({
+        roomId: room._id,
+        slotType: "FULL_DAY",
+        isActive: true,
+      });
+
+      if (fullDaySlots.length > 0) {
+        blockedByFullDay = await Student.find({
+          slotId: { $in: fullDaySlots.map((s) => s._id) },
+          status: "ACTIVE",
+          isDeleted: false,
+        }).select("name seatNumber");
+      }
+    }
+
+    // Construct the matrix
+    const totalSeats = room.totalSeats;
+    const seatMap = {};
+
+    // Fill map with slot-specific students
+    slotStudents.forEach((s) => {
+      seatMap[s.seatNumber] = {
+        status: "OCCUPIED",
+        studentName: s.name,
+        studentId: s._id,
+      };
+    });
+
+    // Mark seats blocked by Full Day bookings (if not already occupied in this slot)
+    blockedByFullDay.forEach((s) => {
+      if (!seatMap[s.seatNumber]) {
+        seatMap[s.seatNumber] = {
+          status: "BLOCKED_BY_FULL_DAY",
+          studentName: s.name,
+          studentId: s._id,
+        };
+      }
+    });
+
+    const seats = [];
+    for (let i = 1; i <= totalSeats; i++) {
+      const seatNo = i.toString();
+      seats.push({
+        seatNumber: seatNo,
+        ...(seatMap[seatNo] || { status: "VACANT" }),
+      });
+    }
+
+    return {
+      roomName: room.name,
+      slotName: slot.name,
+      totalSeats,
+      seats,
+    };
+  }
+
+  /**
    * Get slot with occupancy details
+
    * OPTIMIZED: Use aggregation pipeline instead of separate queries
    */
   static async getSlotWithDetails(slotId) {

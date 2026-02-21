@@ -182,6 +182,20 @@ const studentSchema = new Schema(
   },
 );
 
+// Unique index for seat assignment per slot
+studentSchema.index(
+  { slotId: 1, seatNumber: 1 },
+  { 
+    unique: true, 
+    partialFilterExpression: { 
+      isDeleted: false,
+      slotId: { $exists: true },
+      seatNumber: { $exists: true, $ne: "" }
+    } 
+  }
+);
+
+
 // Indexes
 studentSchema.index({ slotId: 1, status: 1 });
 studentSchema.index({ status: 1 });

@@ -297,10 +297,14 @@ class StudentService {
     const result = await cacheService.getOrSet(
       cacheKey,
       async () => {
-        const student = await Student.findById(studentId).populate(
-          "slotId",
-          "name timeRange monthlyFee",
-        );
+        const student = await Student.findById(studentId).populate({
+          path: "slotId",
+          select: "name timeRange monthlyFee roomId",
+          populate: {
+            path: "roomId",
+            select: "name"
+          }
+        });
 
         if (!student) {
           throw new ApiError(404, "Student not found");
@@ -350,7 +354,14 @@ class StudentService {
     // Execute query
     const [studentsRaw, total] = await Promise.all([
       Student.find(filter)
-        .populate("slotId", "name")
+        .populate({
+          path: "slotId",
+          select: "name roomId",
+          populate: {
+            path: "roomId",
+            select: "name"
+          }
+        })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -390,7 +401,14 @@ class StudentService {
       status,
       isDeleted: false,
     })
-      .populate("slotId", "name timeRange")
+      .populate({
+        path: "slotId",
+        select: "name timeRange roomId",
+        populate: {
+          path: "roomId",
+          select: "name"
+        }
+      })
       .sort({ name: 1 })
       .lean();
 

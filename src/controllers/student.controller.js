@@ -4,7 +4,10 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import StudentService from "../services/student.service.js";
 import FeeService from "../services/fee.service.js";
 import StudentNotificationService from "../services/studentNotification.service.js";
-import { studentRegistrationSchema } from "../utils/validators.js";
+import {
+  studentRegistrationSchema,
+  studentUpdateSchema,
+} from "../utils/validators.js";
 import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
 import {
   getDaysOverdue,
@@ -16,6 +19,11 @@ export const registerStudent = asyncHandler(async (req, res) => {
   // Validate input
   const validation = studentRegistrationSchema.safeParse(req.body);
   if (!validation.success) {
+    // Debug log for troubleshooting
+    console.error("Student registration validation failed:", {
+      errors: validation.error.errors,
+      body: req.body,
+    });
     throw new ApiError(400, "Validation Error", validation.error.errors);
   }
 
@@ -32,6 +40,16 @@ export const registerStudent = asyncHandler(async (req, res) => {
 export const updateStudent = asyncHandler(async (req, res) => {
   const { studentId } = req.params;
   const updateData = req.body;
+
+  // Validate input
+  const validation = studentUpdateSchema.safeParse(updateData);
+  if (!validation.success) {
+    console.error("Student update validation failed:", {
+      errors: validation.error.errors,
+      body: req.body,
+    });
+    throw new ApiError(400, "Validation Error", validation.error.errors);
+  }
 
   const student = await StudentService.updateStudent(
     studentId,

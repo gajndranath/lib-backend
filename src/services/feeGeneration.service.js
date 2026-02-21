@@ -223,6 +223,7 @@ class FeeGenerationService {
               dueCarriedForwardAmount: dueCarriedForward,
               status,
               createdBy: adminId,
+              tenantId: student.tenantId,
             });
 
             // If it's DUE, we also need to create/update a DueRecord

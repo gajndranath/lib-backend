@@ -61,3 +61,14 @@ export const deleteSlot = asyncHandler(async (req, res) => {
     .status(200)
     .json(new ApiResponse(200, slot, "Slot deactivated successfully"));
 });
+
+export const getSeatChart = asyncHandler(async (req, res) => {
+  const { slotId } = req.params;
+
+  const seatChart = await SlotService.getSeatChart(slotId);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, seatChart, "Seat chart fetched successfully"));
+});
+

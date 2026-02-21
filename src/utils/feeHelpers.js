@@ -150,25 +150,23 @@ export const getShortMonthName = (month) => {
  * @returns {Date} Next billing date
  */
 export const calculateNextBillingDate = (billingDay, fromDate = new Date()) => {
-  const nextDate = new Date(fromDate);
-  
-  // Advance one month
-  nextDate.setMonth(nextDate.getMonth() + 1);
+  const date = new Date(fromDate);
+  let year = date.getFullYear();
+  let month = date.getMonth();
 
-  // Handle months with fewer days (e.g. if billingDay is 31 and next month is Feb)
-  const maxDaysInMonth = new Date(
-    nextDate.getFullYear(),
-    nextDate.getMonth() + 1,
-    0,
-  ).getDate();
+  // Advance to the next month
+  month++;
+  if (month > 11) {
+    month = 0;
+    year++;
+  }
 
-  const targetDay = Math.min(billingDay, maxDaysInMonth);
-  nextDate.setDate(targetDay);
-  
-  // Reset time to start of day for clean comparisons
-  nextDate.setHours(0, 0, 0, 0);
+  // Find the valid day for the next month
+  const maxDaysInNextMonth = new Date(year, month + 1, 0).getDate();
+  const targetDay = Math.min(billingDay, maxDaysInNextMonth);
 
-  return nextDate;
+  const nextBilling = new Date(year, month, targetDay, 0, 0, 0, 0);
+  return nextBilling;
 };
 
 /**

@@ -9,14 +9,23 @@ import {
   getSlotDetails,
   getAllSlots,
   deleteSlot,
+  getSeatChart,
 } from "../controllers/slot.controller.js";
 
 const router = Router();
+
+// ... existing code ...
 
 // Apply rate limiting and authentication to all routes
 router.use(apiLimiter);
 router.use(verifyJWT);
 router.use(resolveTenant);
+
+// Get slot details
+router.route("/:slotId").get(getSlotDetails);
+
+// Get seat chart for a slot
+router.route("/:slotId/seat-chart").get(getSeatChart);
 
 // Get all slots (all staff can view)
 router.route("/").get(getAllSlots);

@@ -73,8 +73,15 @@ export const studentRegistrationSchema = z
       .array(z.string().max(50))
       .max(10, "Maximum 10 tags allowed")
       .optional(),
+
+    // Status & Verification (from Admin Dashboard)
+    status: z.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).default("ACTIVE"),
+    emailVerified: z.boolean().optional(),
+    phoneVerified: z.boolean().optional(),
   })
-  .strict();
+  .passthrough();
+
+export const studentUpdateSchema = studentRegistrationSchema.partial();
 
 export const paymentUpdateSchema = z.object({
   studentId: z.string().regex(patterns.mongodb, "Invalid student ID format"),
