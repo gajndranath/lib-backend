@@ -6,7 +6,11 @@ import FeeService from "../services/fee.service.js";
 import StudentNotificationService from "../services/studentNotification.service.js";
 import { studentRegistrationSchema } from "../utils/validators.js";
 import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
-import { getDaysOverdue, getFeeDueDate, getMonthName } from "../utils/feeHelpers.js";
+import {
+  getDaysOverdue,
+  getFeeDueDate,
+  getMonthName,
+} from "../utils/feeHelpers.js";
 
 export const registerStudent = asyncHandler(async (req, res) => {
   // Validate input
@@ -436,8 +440,153 @@ export const getStudentFeeCalendar = asyncHandler(async (req, res) => {
     pendingMonths: recordedFees.filter((c) => c.status === "PENDING").length,
   };
 
-  return res.status(200).json(
-    new ApiResponse(200, { calendar, summary, year: targetYear }, "Fee calendar retrieved"),
-  );
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { calendar, summary, year: targetYear },
+        "Fee calendar retrieved",
+      ),
+    );
 });
 
+// ✅ Get all students with overdue fees, sorted by daysOverdue (worst first)
+export const getOverdueSummary = asyncHandler(async (req, res) => {
+  const { DueRecord } = await import("../models/dueRecord.model.js");
+
+  // Fetch all unresolved due records, populated with student info
+  const dueRecords = await DueRecord.find({ resolved: false })
+    .populate("studentId", "name phone email libraryId monthlyFee")
+    .lean({ virtuals: true }); // virtuals: true gives us daysOverdue virtual
+
+  // Build enriched list
+  const students = dueRecords
+    .filter((r) => r.studentId) // skip orphaned records
+    .map((r) => {
+      const days = r.daysOverdue ?? 0;
+      let urgency = "green";
+      if (days >= 30) urgency = "critical";
+      else if (days >= 15) urgency = "red";
+      else if (days >= 7) urgency = "orange";
+      else if (days >= 3) urgency = "yellow";
+      else if (days >= 1) urgency = "mild";
+
+      return {
+        dueRecordId: r._id,
+        studentId: r.studentId._id,
+        name: r.studentId.name,
+        phone: r.studentId.phone,
+        email: r.studentId.email,
+        libraryId: r.studentId.libraryId,
+        monthlyFee: r.studentId.monthlyFee,
+        monthsDue: r.monthsDue,
+        totalDueAmount: r.totalDueAmount,
+        daysOverdue: days,
+        lastReminderSentAt: r.lastReminderSentAt,
+        nextReminderDue: r.nextReminderDue,
+        reminderCount: r.reminderCount ?? 0,
+        escalationLevel: r.escalationLevel ?? 0,
+        urgency,
+        dueSince: r.dueSince,
+      };
+    })
+    .sort((a, b) => b.daysOverdue - a.daysOverdue); // worst first
+
+  const totals = {
+    totalStudentsOverdue: students.length,
+    totalOutstandingAmount: students.reduce((s, r) => s + r.totalDueAmount, 0),
+    critical: students.filter((r) => r.urgency === "critical").length,
+    red: students.filter((r) => r.urgency === "red").length,
+    orange: students.filter((r) => r.urgency === "orange").length,
+    yellow: students.filter((r) => r.urgency === "yellow").length,
+    mild: students.filter((r) => r.urgency === "mild").length,
+  };
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, { students, totals }, "Overdue summary retrieved"),
+    );
+});
+
+export const sendBulkOverdueReminders = asyncHandler(async (req, res) => {
+  const { studentIds } = req.body;
+  if (!Array.isArray(studentIds) || studentIds.length === 0) {
+    throw new ApiError(400, "No students selected for reminder");
+  }
+
+  const { DueRecord } = await import("../models/dueRecord.model.js");
+  const { Student } = await import("../models/student.model.js");
+  const NotificationService = (
+    await import("../services/notification.service.js")
+  ).default;
+
+  let success = 0;
+  let errors = [];
+
+  for (const studentId of studentIds) {
+    try {
+      const dueRecord = await DueRecord.findOne({ studentId, resolved: false });
+      const student = await Student.findById(studentId);
+      if (!dueRecord || !student) continue;
+      await NotificationService.sendMultiChannelNotification({
+        studentId: student._id,
+        studentName: student.name,
+        email: student.email,
+        title: `Fee Overdue Reminder`,
+        message: `Dear ${student.name}, your fee is overdue. Please pay immediately to avoid disruption.`,
+        type: "FEE_OVERDUE_BULK",
+        metadata: {
+          dueRecordId: dueRecord._id,
+          totalDueAmount: dueRecord.totalDueAmount,
+        },
+      });
+      success++;
+    } catch (err) {
+      errors.push({ studentId, error: err.message });
+    }
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { success, errors }, "Bulk reminders sent"));
+});
+
+export const exportOverdueSummaryCSV = asyncHandler(async (req, res) => {
+  const { DueRecord } = await import("../models/dueRecord.model.js");
+  const dueRecords = await DueRecord.find({ resolved: false })
+    .populate("studentId", "name phone email libraryId monthlyFee")
+    .lean({ virtuals: true });
+
+  const students = dueRecords
+    .filter((r) => r.studentId)
+    .map((r) => ({
+      Name: r.studentId.name,
+      LibraryID: r.studentId.libraryId,
+      Phone: r.studentId.phone,
+      Email: r.studentId.email,
+      MonthsDue: r.monthsDue.join(", "),
+      TotalDue: r.totalDueAmount,
+      DaysOverdue: r.daysOverdue ?? 0,
+      Urgency: r.escalationLevel,
+      LastReminder: r.lastReminderSentAt
+        ? new Date(r.lastReminderSentAt).toLocaleDateString()
+        : "",
+    }));
+
+  const csvRows = [
+    Object.keys(students[0] || {}).join(","),
+    ...students.map((s) =>
+      Object.values(s)
+        .map((v) => `"${v}"`)
+        .join(","),
+    ),
+  ];
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader(
+    "Content-Disposition",
+    "attachment; filename=overdue_summary.csv",
+  );
+  return res.status(200).send(csvRows.join("\n"));
+});

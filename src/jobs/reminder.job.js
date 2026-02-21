@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import ReminderService from "../services/reminder.service.js";
 import FeeService from "../services/fee.service.js";
 import NotificationService from "../services/notification.service.js";
+import AdminReminderService from "../services/adminReminder.service.js";
+
 
 // 1. Daily personalized fee generation - Every day at 00:01
 cron.schedule("1 0 * * *", async () => {
@@ -182,21 +184,53 @@ cron.schedule("0 11 * * *", async () => {
 // 5. End-of-month due students reminder - Last 3 days of month at 09:00
 cron.schedule("0 9 * * *", async () => {
   console.log("📬 End-of-month due students reminder job started");
-
   try {
-    const AdminReminderService = (
-      await import("../services/adminReminder.service.js")
-    ).default;
-
     await AdminReminderService.processEndOfMonthDueReminders();
-
     console.log("✅ End-of-month due reminders processed");
   } catch (error) {
     console.error("❌ Error in end-of-month reminder processing:", error);
   }
 });
 
+// ─── NEW PHASE 1: Daily Overdue Escalation ───────────────────────────────────
+// Runs daily at 09:05 (just after the daily reminder job at 09:00)
+// Fires Day-1 / Day-3 / Day-7 / Day-15 / Day-30 escalation reminders
+cron.schedule("5 9 * * *", async () => {
+  console.log("📈 Daily overdue escalation job started");
+  try {
+    const result = await AdminReminderService.processDailyOverdueEscalations();
+    console.log(
+      `✅ Escalation done — processed: ${result.processed}, escalated: ${result.escalated.length}, errors: ${result.errors.length}`
+    );
+  } catch (error) {
+    console.error("❌ Error in overdue escalation cron:", error);
+    await NotificationService.sendSystemAlert(
+      "Escalation Cron Failed",
+      `Error: ${error.message}`,
+      "CRITICAL"
+    );
+  }
+});
+
+// ─── NEW PHASE 2: Auto-mark PENDING → DUE on 6th of each month ──────────────
+// Runs on the 6th at 07:00 AM (after the grace period of 5 days has passed)
+cron.schedule("0 7 6 * *", async () => {
+  console.log("⏰ Auto-mark overdue fees job started (6th of month)");
+  try {
+    const result = await AdminReminderService.autoMarkOverdueFees();
+    console.log(`✅ Auto-marked ${result.marked} fees as DUE, errors: ${result.errors.length}`);
+  } catch (error) {
+    console.error("❌ Error in auto-mark overdue cron:", error);
+    await NotificationService.sendSystemAlert(
+      "Auto-Mark Due Cron Failed",
+      `Error: ${error.message}`,
+      "CRITICAL"
+    );
+  }
+});
+
 // 6. System health check - Every hour
+
 cron.schedule("0 * * * *", async () => {
   console.log("🩺 System health check job started");
 

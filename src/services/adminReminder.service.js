@@ -1,9 +1,10 @@
 import { AdminReminder } from "../models/adminReminder.model.js";
-import { DueRecord } from "../models/dueRecord.model.js";
+import { DueRecord, ESCALATION_LEVELS } from "../models/dueRecord.model.js";
 import { Student } from "../models/student.model.js";
 import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
 import NotificationService from "./notification.service.js";
 import { ApiError } from "../utils/ApiError.js";
+import { getFeeDueDate, getMonthName } from "../utils/feeHelpers.js";
 
 class AdminReminderService {
   /**
@@ -595,6 +596,219 @@ class AdminReminderService {
 
     await reminder.save();
     return reminder;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 1: Daily Overdue Escalation Cron
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run daily at 09:00.
+   * Finds all unresolved DueRecords whose nextReminderDue <= now, sends
+   * the appropriate escalation reminder to both student and admin, and
+   * advances the schedule to the next escalation tier.
+   */
+  static async processDailyOverdueEscalations() {
+    const now = new Date();
+
+    // Find records that are due for a reminder right now
+    const records = await DueRecord.find({
+      resolved: false,
+      $or: [
+        { nextReminderDue: { $lte: now } },          // scheduled slot reached
+        { nextReminderDue: null, reminderCount: 0 }, // brand new, never sent
+      ],
+    }).populate("studentId", "name email phone fcmToken webPushSubscription");
+
+    if (records.length === 0) {
+      console.log("[Escalation] No due records ready for escalation.");
+      return { processed: 0, escalated: [], errors: [] };
+    }
+
+    const escalated = [];
+    const errors = [];
+
+    for (const record of records) {
+      try {
+        const student = record.studentId;
+        if (!student) continue;
+
+        record.updateEscalationLevel();
+        const level = record.escalationLevel;
+        const levelLabel = ESCALATION_LEVELS[level]?.label ?? "unknown";
+        const urgencyEmoji = ["🟢", "🟡", "🟠", "🔴", "🔴", "⛔"][level] ?? "🔴";
+
+        // Build escalation-aware messages
+        const daysLate = record.daysOverdue;
+        const monthList = record.monthsDue.join(", ");
+        const studentTitle = `${urgencyEmoji} Fee Overdue — ${daysLate} day${daysLate !== 1 ? "s" : ""} late`;
+        const studentMsg = `Dear ${student.name}, your fee of ₹${record.totalDueAmount} for month(s) ${monthList} is ${daysLate} day(s) overdue. Please pay immediately to avoid service disruption.`;
+
+        // Notify student
+        try {
+          await NotificationService.sendMultiChannelNotification({
+            studentId: student._id,
+            studentName: student.name,
+            email: student.email,
+            title: studentTitle,
+            message: studentMsg,
+            type: "FEE_OVERDUE_ESCALATION",
+            metadata: {
+              phone: student.phone,
+              fcmToken: student.fcmToken,
+              webPushSubscription: student.webPushSubscription,
+              escalationLevel: level,
+              daysOverdue: daysLate,
+            },
+          });
+        } catch (e) {
+          console.error(`[Escalation] Failed to notify student ${student._id}:`, e.message);
+        }
+
+        // Notify admin — escalate to super-admin at level 5
+        try {
+          const adminTitle = `${urgencyEmoji} [${levelLabel.toUpperCase()}] ${student.name} — ${daysLate}d overdue`;
+          const adminMsg = `Student ${student.name} has not paid ₹${record.totalDueAmount} for ${monthList}. Overdue by ${daysLate} days. Escalation level: ${level}/5.`;
+
+          if (level >= 5) {
+            // Super admin escalation — send system alert
+            await NotificationService.sendSystemAlert(adminTitle, adminMsg, "CRITICAL");
+          } else {
+            await NotificationService.sendAdminNotification(
+              record.createdBy ?? null,
+              adminTitle,
+              adminMsg,
+              "FEE_OVERDUE_ESCALATION",
+            );
+          }
+        } catch (e) {
+          console.error(`[Escalation] Failed to notify admin for record ${record._id}:`, e.message);
+        }
+
+        // Advance escalation and save
+        record.recordReminderSent();
+        await record.save();
+
+        escalated.push({
+          studentId: student._id,
+          studentName: student.name,
+          daysOverdue: daysLate,
+          escalationLevel: level,
+          totalDueAmount: record.totalDueAmount,
+        });
+      } catch (err) {
+        console.error(`[Escalation] Error processing record ${record._id}:`, err.message);
+        errors.push({ recordId: record._id, error: err.message });
+      }
+    }
+
+    console.log(`[Escalation] Processed ${records.length} records — Escalated: ${escalated.length}, Errors: ${errors.length}`);
+    return { processed: records.length, escalated, errors };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PHASE 2: Auto-Mark Overdue Fees as DUE (runs on 6th of month)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Auto-marks all PENDING fees from the previous month as DUE.
+   * Called by cron on the 6th of each month (day after grace period ends).
+   * Creates/updates DueRecords and sends one batch admin notification.
+   */
+  static async autoMarkOverdueFees() {
+    const today = new Date();
+    // Target the previous month
+    const targetMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+    const targetYear  = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+
+    console.log(`[AutoMark] Checking PENDING fees for ${getMonthName(targetMonth)} ${targetYear}...`);
+
+    // Find all PENDING fees for last month that haven't been locked/advance-covered
+    const pendingFees = await StudentMonthlyFee.find({
+      month: targetMonth,
+      year:  targetYear,
+      status: "PENDING",
+      coveredByAdvance: false,
+      locked: false,
+    }).populate("studentId", "name email phone fcmToken webPushSubscription tenantId");
+
+    if (pendingFees.length === 0) {
+      console.log("[AutoMark] No pending fees to mark as DUE.");
+      return { marked: 0, errors: [] };
+    }
+
+    const FeeDueService = (await import("./feeDue.service.js")).default;
+    const { createMonthYearKey } = await import("../utils/feeHelpers.js");
+    const feeDueDate = getFeeDueDate(targetMonth, targetYear); // 5th of current month
+    const monthKey = createMonthYearKey(targetMonth, targetYear);
+
+    const marked = [];
+    const errors = [];
+
+    for (const fee of pendingFees) {
+      try {
+        // Update fee status
+        fee.status = "DUE";
+        await fee.save();
+
+        const studentId = fee.studentId?._id || fee.studentId;
+
+        // Create or update DueRecord
+        let dueRecord = await DueRecord.findOne({ studentId, resolved: false });
+        if (dueRecord) {
+          if (!dueRecord.monthsDue.includes(monthKey)) {
+            dueRecord.monthsDue.push(monthKey);
+            dueRecord.monthsDue.sort();
+          }
+          // Set dueSince to the earliest fee due date if not set
+          if (!dueRecord.dueSince) dueRecord.dueSince = feeDueDate;
+          dueRecord.totalDueAmount += (fee.totalAmount - (fee.paidAmount || 0));
+          dueRecord.updateEscalationLevel();
+          // Trigger first reminder immediately
+          if (!dueRecord.nextReminderDue) {
+            const next = new Date();
+            next.setHours(9, 30, 0, 0);
+            dueRecord.nextReminderDue = next;
+          }
+          await dueRecord.save();
+        } else {
+          const next = new Date();
+          next.setHours(9, 30, 0, 0);
+          dueRecord = await DueRecord.create({
+            studentId,
+            monthsDue: [monthKey],
+            totalDueAmount: fee.totalAmount - (fee.paidAmount || 0),
+            dueSince: feeDueDate,
+            reminderDate: next,
+            nextReminderDue: next,
+            escalationLevel: 0,
+            tenantId: fee.tenantId,
+          });
+        }
+
+        marked.push({ studentId, name: fee.studentId?.name });
+      } catch (err) {
+        console.error(`[AutoMark] Error for student ${fee.studentId?._id}:`, err.message);
+        errors.push({ studentId: fee.studentId?._id, error: err.message });
+      }
+    }
+
+    // Send one consolidated admin notification listing all newly-due students
+    if (marked.length > 0) {
+      try {
+        const nameList = marked.map((m) => `• ${m.name}`).join("\n");
+        await NotificationService.sendSystemAlert(
+          `📋 Auto-Due: ${marked.length} student${marked.length > 1 ? "s" : ""} marked DUE for ${getMonthName(targetMonth)} ${targetYear}`,
+          `The following ${marked.length} student(s) did not pay by the 5th and have been auto-marked as DUE:\n\n${nameList}\n\nPlease review and send reminders from the admin dashboard.`,
+          "WARNING",
+        );
+      } catch (e) {
+        console.error("[AutoMark] Failed to send admin batch alert:", e.message);
+      }
+    }
+
+    console.log(`[AutoMark] Done. Marked: ${marked.length}, Errors: ${errors.length}`);
+    return { marked: marked.length, errors };
   }
 }
 

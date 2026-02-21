@@ -13,6 +13,8 @@ import {
   getReceiptDetails,
   downloadReceiptPDF,
   getStudentFeeCalendar,
+  getOverdueSummary,
+  sendBulkOverdueReminders,
 } from "../controllers/student.controller.js";
 
 const router = Router();
@@ -31,10 +33,16 @@ router.route("/dashboard-status").get(getDashboardPaymentStatus);
 // ✅ Get full-year calendar for a student (admin view)
 router.route("/calendar/:studentId").get(getStudentFeeCalendar);
 
+// ✅ Get all overdue students sorted by daysOverdue (admin dashboard)
+router.route("/overdue-summary").get(getOverdueSummary);
+
 // Get receipt details (admin)
 router
   .route("/:studentId/:month/:year/receipt-details")
-  .get(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), getReceiptDetails);
+  .get(
+    authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
+    getReceiptDetails,
+  );
 
 // Download receipt PDF (admin)
 router
@@ -42,6 +50,14 @@ router
   .get(
     authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
     downloadReceiptPDF,
+  );
+
+// GET /overdue-summary/export for CSV export
+router
+  .route("/overdue-summary/export")
+  .get(
+    authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
+    require("../controllers/student.controller.js").exportOverdueSummaryCSV,
   );
 
 // Protected routes for Admin and Super Admin
@@ -60,5 +76,13 @@ router
 router
   .route("/:studentId/advance/apply")
   .post(authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN), applyAdvance);
+
+// Bulk overdue reminders
+router
+  .route("/overdue-reminders/bulk")
+  .post(
+    authorizeRoles(UserRoles.ADMIN, UserRoles.SUPER_ADMIN),
+    sendBulkOverdueReminders,
+  );
 
 export default router;
