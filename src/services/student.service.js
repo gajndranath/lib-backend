@@ -177,8 +177,24 @@ class StudentService {
 
     await student.save();
 
+    // If joiningDate was changed, trigger a catch-up for fees immediately
+    if (updateData.joiningDate !== undefined) {
+      try {
+        const FeeGenerationService = (await import("./feeGeneration.service.js")).default;
+        // Triggering personalized fee generation logic will catch any months 
+        // between the new joining date and today.
+        await FeeGenerationService.generatePersonalizedFees(adminId, student._id);
+        console.log(`✅ Billing cycle synced for student ${student.libraryId}`);
+      } catch (feeError) {
+        console.error("❌ Failed to sync billing cycle:", feeError.message);
+      }
+    }
+
     // Invalidate student cache
     await cacheService.del(CACHE_KEYS.STUDENT(studentId));
+
+    // Reload the student from DB to return the final state after all hooks and services
+    const updatedStudent = await Student.findById(studentId);
 
     // Log the action
     await AdminActionLog.create({
@@ -191,7 +207,7 @@ class StudentService {
       metadata: { studentId: student._id },
     });
 
-    return student;
+    return updatedStudent;
   }
 
   /**
@@ -332,7 +348,7 @@ class StudentService {
     }
 
     // Execute query
-    const [students, total] = await Promise.all([
+    const [studentsRaw, total] = await Promise.all([
       Student.find(filter)
         .populate("slotId", "name")
         .sort({ createdAt: -1 })
@@ -341,6 +357,18 @@ class StudentService {
         .lean(),
       Student.countDocuments(filter),
     ]);
+
+    // Attach fee summary for each student in the current page
+    const students = await Promise.all(
+      studentsRaw.map(async (student) => {
+        const summary = await FeeService.getStudentFeeSummary(student._id);
+        return {
+          ...student,
+          totalDue: summary?.totals?.totalDue || 0,
+          totalPaid: summary?.totals?.totalPaid || 0,
+        };
+      }),
+    );
 
     return {
       students,

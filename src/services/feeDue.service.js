@@ -19,6 +19,25 @@ import { CACHE_KEYS } from "../utils/cacheStrategy.js";
 
 class FeeDueService {
   /**
+   * Internal helper to sync total due amount to the latest month's balance
+   * In a carry-forward system, the latest month's totalAmount - paidAmount 
+   * represents the entire outstanding history.
+   */
+  static async _syncTotalDue(dueRecord) {
+    const { month, year } = parseMonthYearKey(dueRecord.monthsDue[dueRecord.monthsDue.length - 1]);
+    const latestFee = await StudentMonthlyFee.findOne({
+      studentId: dueRecord.studentId,
+      month,
+      year
+    });
+    
+    if (latestFee) {
+      dueRecord.totalDueAmount = roundFeeAmount(latestFee.totalAmount - (latestFee.paidAmount || 0));
+      await dueRecord.save();
+    }
+  }
+
+  /**
    * Mark fee as due
    */
   static async markAsDue(studentId, month, year, reminderDate, adminId) {
@@ -56,12 +75,11 @@ class FeeDueService {
       // Add to existing due record if not already there
       if (!dueRecord.monthsDue.includes(monthKey)) {
         dueRecord.monthsDue.push(monthKey);
-        dueRecord.totalDueAmount = roundFeeAmount(
-          dueRecord.totalDueAmount + monthlyFee.totalAmount,
-        );
-        dueRecord.reminderDate = reminderDate;
-        await dueRecord.save();
+        // Sort monthsDue to ensure the latest one is always at the end
+        dueRecord.monthsDue.sort();
       }
+      dueRecord.reminderDate = reminderDate || dueRecord.reminderDate;
+      await this._syncTotalDue(dueRecord);
     } else {
       // Create new due record
       dueRecord = await DueRecord.create({
@@ -74,17 +92,31 @@ class FeeDueService {
     }
 
     // Log the action
+    const AdminActionLog = (await import("../models/adminActionLog.model.js")).AdminActionLog;
     await AdminActionLog.create({
       adminId,
       action: "MARK_DUE",
       targetEntity: "FEE",
       targetId: monthlyFee._id,
-      oldValue: { status: monthlyFee.status },
+      oldValue: { status: "PENDING" },
       newValue: { status: "DUE", reminderDate },
       metadata: { studentId, month, year },
     });
 
-    // Invalidate fee caches so next read reflects updated due status
+    // Notify Student
+    const Notification = (await import("../models/notification.model.js")).default;
+    const { getMonthName } = await import("../utils/feeHelpers.js");
+    await Notification.create({
+      userId: studentId,
+      userType: "Student",
+      title: "Fee Payment Due",
+      message: `Your fee for ${getMonthName(month)} ${year} has been marked as DUE. Please pay ₹${monthlyFee.totalAmount} to avoid services disruption.`,
+      type: "FEE_DUE",
+      priority: "HIGH",
+      tenantId: monthlyFee.tenantId
+    });
+
+    // Invalidate fee caches
     await Promise.all([
       cacheService.del(CACHE_KEYS.STUDENT_FEES(studentId.toString())),
       cacheService.del(CACHE_KEYS.STUDENT_DUE(studentId.toString())),
@@ -101,7 +133,7 @@ class FeeDueService {
     monthKey,
     dueAmount,
     adminId,
-    reminderDate = null // New parameter
+    reminderDate = null
   ) {
     let dueRecord = await DueRecord.findOne({
       studentId,
@@ -109,30 +141,19 @@ class FeeDueService {
     });
 
     if (dueRecord) {
-      // Add to existing due record if not already there
       if (!dueRecord.monthsDue.includes(monthKey)) {
         dueRecord.monthsDue.push(monthKey);
-        dueRecord.totalDueAmount = roundFeeAmount(
-          dueRecord.totalDueAmount + dueAmount,
-        );
-        // Update reminder date if provided
-        if (reminderDate) dueRecord.reminderDate = reminderDate;
-        await dueRecord.save();
-      } else {
-        // Month already exists in due record - update the amount
-        dueRecord.totalDueAmount = roundFeeAmount(
-          dueRecord.totalDueAmount + dueAmount,
-        );
-        if (reminderDate) dueRecord.reminderDate = reminderDate;
-        await dueRecord.save();
+        dueRecord.monthsDue.sort();
       }
+      if (reminderDate) dueRecord.reminderDate = reminderDate;
+      // Use the robust sync logic
+      await this._syncTotalDue(dueRecord);
     } else {
-      // Create new due record for partial payment
       dueRecord = await DueRecord.create({
         studentId,
         monthsDue: [monthKey],
         totalDueAmount: dueAmount,
-        reminderDate: reminderDate || new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // Default to 3 days from now
+        reminderDate: reminderDate || new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         createdBy: adminId,
       });
     }
@@ -156,26 +177,13 @@ class FeeDueService {
       // If no more months due, resolve the record
       if (dueRecord.monthsDue.length === 0) {
         dueRecord.resolved = true;
-        dueRecord.resolvedAt = new Date();
+        dueRecord.resolutionDate = new Date();
         dueRecord.totalDueAmount = 0;
+        await dueRecord.save();
       } else {
-        // Recalculate total due amount
-        let newTotalDue = 0;
-        for (const mk of dueRecord.monthsDue) {
-          const { month, year } = parseMonthYearKey(mk);
-          const fee = await StudentMonthlyFee.findOne({
-            studentId,
-            month,
-            year,
-          });
-          if (fee && fee.status === "DUE") {
-            newTotalDue += fee.totalAmount;
-          }
-        }
-        dueRecord.totalDueAmount = roundFeeAmount(newTotalDue);
+        // Sync total due to the remaining latest month
+        await this._syncTotalDue(dueRecord);
       }
-
-      await dueRecord.save();
     }
   }
 

@@ -359,7 +359,7 @@ class AdminReminderService {
               continue;
             }
 
-            const studentIds = dueStudents.map((f) => f.studentId._id);
+            const studentIds = dueStudents.map((f) => f.studentId?._id).filter(id => id);
 
             // Create end-of-month reminder
             const reminder = await AdminReminder.create({
@@ -397,7 +397,7 @@ class AdminReminderService {
             for (const studentFee of dueStudents) {
               try {
                 await NotificationService.sendMultiChannelNotification({
-                  studentId: studentFee.studentId._id,
+                  studentId: studentFee.studentId?._id,
                   studentName: studentFee.studentId.name,
                   email: studentFee.studentId.email,
                   title: "Month-End Payment Reminder",
@@ -413,7 +413,7 @@ class AdminReminderService {
                 });
               } catch (error) {
                 console.error(
-                  `Failed to send end-of-month reminder to student ${studentFee.studentId._id}:`,
+                  `Failed to send end-of-month reminder to student ${studentFee.studentId?._id || "unknown"}:`,
                   error,
                 );
               }

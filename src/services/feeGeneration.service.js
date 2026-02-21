@@ -11,6 +11,7 @@ import {
   calculateDueCarryForward,
   calculateNextBillingDate,
   getFeeRecordForMonth,
+  isOverdue,
 } from "../utils/feeHelpers.js";
 import FeeAdvanceService from "./feeAdvance.service.js";
 
@@ -158,16 +159,25 @@ class FeeGenerationService {
    * Generate fee for students whose billing date is today or overdue
    * This runs daily and creates fees based on individual student billing cycles
    */
-  static async generatePersonalizedFees(adminId = null) {
+  static async generatePersonalizedFees(adminId = null, studentId = null) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Find active students whose nextBillingDate is today or earlier
-    const studentsDue = await Student.find({
+    const graceDays = parseInt(process.env.PAYMENT_GRACE_PERIOD) || 1;
+
+    // Build filter
+    const filter = {
       status: "ACTIVE",
       isDeleted: false,
       nextBillingDate: { $lte: today },
-    });
+    };
+
+    if (studentId) {
+      filter._id = studentId;
+    }
+
+    // Find active students whose nextBillingDate is today or earlier
+    const studentsDue = await Student.find(filter);
 
     const results = {
       generated: 0,
@@ -178,67 +188,96 @@ class FeeGenerationService {
 
     for (const student of studentsDue) {
       try {
-        const billingDate = new Date(student.nextBillingDate);
-        const month = billingDate.getMonth();
-        const year = billingDate.getFullYear();
+        // While the student's nextBillingDate is today or earlier, continue generating fees
+        // This handles "catch-up" if a student joined months ago
+        while (student.nextBillingDate <= today) {
+          const billingDate = new Date(student.nextBillingDate);
+          const month = billingDate.getMonth();
+          const year = billingDate.getFullYear();
 
-        // Check if fee already exists for this billing cycle
-        const existingFee = await getFeeRecordForMonth(
-          student._id,
-          month,
-          year,
-        );
+          // Check if fee already exists for this billing cycle
+          const existingFee = await getFeeRecordForMonth(
+            student._id,
+            month,
+            year,
+          );
 
-        if (existingFee) {
-          results.skipped++;
-          continue;
+          if (!existingFee) {
+            // Check if this new fee is already overdue
+            const overdue = isOverdue(billingDate, graceDays);
+            const status = overdue ? "DUE" : "PENDING";
+
+            // Calculate due carry forward using helper
+            const dueCarriedForward = await calculateDueCarryForward(
+              student._id,
+              month,
+              year,
+            );
+
+            // Create monthly fee record
+            const monthlyFee = await StudentMonthlyFee.create({
+              studentId: student._id,
+              month,
+              year,
+              baseFee: student.monthlyFee,
+              dueCarriedForwardAmount: dueCarriedForward,
+              status,
+              createdBy: adminId,
+            });
+
+            // If it's DUE, we also need to create/update a DueRecord
+            if (overdue) {
+              const FeeDueService = (await import("./feeDue.service.js")).default;
+              // We use a helper-like logic to ensure DueRecord is synced
+              // markAsDue also creates a reminder, which is good for senior SaaS
+              await FeeDueService.markAsDue(
+                student._id,
+                month,
+                year,
+                new Date(),
+                adminId,
+              );
+            }
+
+            // Check if advance covers this month
+            // (Only if it wasn't already marked as DUE/Paid by markAsDue)
+            const currentFee = await StudentMonthlyFee.findById(monthlyFee._id);
+            if (currentFee.status === "PENDING") {
+              await FeeAdvanceService.applyAdvanceIfAvailable(
+                student._id,
+                month,
+                year,
+                currentFee.totalAmount,
+                adminId,
+              );
+            }
+
+            results.generated++;
+            results.studentsProcessed.push({
+              studentId: student._id,
+              name: student.name,
+              month,
+              year,
+              status: overdue ? "DUE" : "PENDING",
+              billingDate: billingDate,
+              totalDue: currentFee.totalAmount,
+            });
+          } else {
+            results.skipped++;
+          }
+
+          // Update student's next billing date using helper
+          const nextBilling = calculateNextBillingDate(
+            student.billingDay,
+            billingDate,
+          );
+          student.nextBillingDate = nextBilling;
+          
+          // If the next billing date is still in the past, we'll loop again
         }
-
-        // Calculate due carry forward using helper
-        const dueCarriedForward = await calculateDueCarryForward(
-          student._id,
-          month,
-          year,
-        );
-
-        // Create monthly fee record
-        const monthlyFee = await StudentMonthlyFee.create({
-          studentId: student._id,
-          month,
-          year,
-          baseFee: student.monthlyFee,
-          dueCarriedForwardAmount: dueCarriedForward,
-          status: "PENDING",
-          createdBy: adminId,
-        });
-
-        // Update student's next billing date using helper
-        const nextBilling = calculateNextBillingDate(
-          student.billingDay,
-          billingDate,
-        );
-        student.nextBillingDate = nextBilling;
+        
+        // Save the student once after all catch-up billing is done
         await student.save();
-
-        // Check if advance covers this month
-        await FeeAdvanceService.applyAdvanceIfAvailable(
-          student._id,
-          month,
-          year,
-          monthlyFee.totalAmount,
-          adminId,
-        );
-
-        results.generated++;
-        results.studentsProcessed.push({
-          studentId: student._id,
-          name: student.name,
-          month,
-          year,
-          billingDate: billingDate,
-          nextBillingDate: nextBilling,
-          totalDue: monthlyFee.totalAmount,
-        });
       } catch (error) {
         results.errors.push({
           student: student.name,

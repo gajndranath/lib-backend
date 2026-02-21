@@ -15,7 +15,18 @@ import { AdvanceBalance } from "../models/advanceBalance.model.js";
  * @returns {Promise<number>} Amount to carry forward
  */
 export const calculateDueCarryForward = async (studentId, month, year) => {
-  // Calculate previous month
+  // Current SaaS Strategy: The DueRecord is the source of truth for all outstanding debt.
+  const unresolvedDue = await DueRecord.findOne({
+    studentId,
+    resolved: false,
+  });
+
+  if (unresolvedDue && unresolvedDue.totalDueAmount > 0) {
+    return roundFeeAmount(unresolvedDue.totalDueAmount);
+  }
+
+  // Fallback: If no DueRecord exists, check the immediate previous month
+  // This helps handle legacy data or edge cases where a DueRecord wasn't created
   const previousMonth = month === 0 ? 11 : month - 1;
   const previousYear = month === 0 ? year - 1 : year;
 
@@ -25,39 +36,16 @@ export const calculateDueCarryForward = async (studentId, month, year) => {
     year: previousYear,
   });
 
-  let dueCarriedForward = 0;
-
-  // Carry forward if previous month has unpaid dues
   if (previousFee) {
     if (previousFee.status === "DUE") {
-      // Full unpaid month
-      dueCarriedForward =
-        previousFee.baseFee + previousFee.dueCarriedForwardAmount;
+      return roundFeeAmount(previousFee.totalAmount);
     } else if (previousFee.status === "PAID" && previousFee.paidAmount) {
-      // Partial payment - carry forward the unpaid portion
-      const unpaidAmount =
-        Math.round((previousFee.totalAmount - previousFee.paidAmount) * 100) /
-        100;
-      if (unpaidAmount > 0) {
-        dueCarriedForward = unpaidAmount;
-      }
+      const unpaidAmount = roundFeeAmount(previousFee.totalAmount - previousFee.paidAmount);
+      return unpaidAmount > 0 ? unpaidAmount : 0;
     }
   }
 
-  // Also check for unresolved due records to ensure cumulative tracking
-  const unresolvedDue = await DueRecord.findOne({
-    studentId,
-    resolved: false,
-  });
-
-  if (unresolvedDue && unresolvedDue.totalDueAmount > 0) {
-    // Add any additional unresolved dues
-    dueCarriedForward =
-      Math.round((dueCarriedForward + unresolvedDue.totalDueAmount) * 100) /
-      100;
-  }
-
-  return dueCarriedForward;
+  return 0;
 };
 
 /**
@@ -163,20 +151,22 @@ export const getShortMonthName = (month) => {
  */
 export const calculateNextBillingDate = (billingDay, fromDate = new Date()) => {
   const nextDate = new Date(fromDate);
+  
+  // Advance one month
   nextDate.setMonth(nextDate.getMonth() + 1);
 
-  // Handle months with fewer days
-  const maxDayInNextMonth = new Date(
+  // Handle months with fewer days (e.g. if billingDay is 31 and next month is Feb)
+  const maxDaysInMonth = new Date(
     nextDate.getFullYear(),
     nextDate.getMonth() + 1,
     0,
   ).getDate();
 
-  if (billingDay > maxDayInNextMonth) {
-    nextDate.setDate(maxDayInNextMonth);
-  } else {
-    nextDate.setDate(billingDay);
-  }
+  const targetDay = Math.min(billingDay, maxDaysInMonth);
+  nextDate.setDate(targetDay);
+  
+  // Reset time to start of day for clean comparisons
+  nextDate.setHours(0, 0, 0, 0);
 
   return nextDate;
 };
@@ -194,6 +184,23 @@ export const getFeeRecordForMonth = async (studentId, month, year) => {
     month,
     year,
   });
+};
+
+/**
+ * Check if a billing date is overdue based on grace period
+ * @param {Date} billingDate - Date the fee was generated for
+ * @param {number} graceDays - Number of days allowed before marking as due
+ * @returns {boolean} True if overdue
+ */
+export const isOverdue = (billingDate, graceDays = 1) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const dueDate = new Date(billingDate);
+  dueDate.setDate(dueDate.getDate() + graceDays);
+  dueDate.setHours(0, 0, 0, 0);
+
+  return today > dueDate;
 };
 
 /**

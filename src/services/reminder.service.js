@@ -39,7 +39,7 @@ class ReminderService {
     for (const fee of pendingFees) {
       // Check if reminder already exists
       const existingReminder = await Reminder.findOne({
-        studentId: fee.studentId._id,
+        studentId: fee.studentId?._id,
         month: currentMonth,
         year: currentYear,
         type: ReminderType.MONTHLY,
@@ -49,7 +49,7 @@ class ReminderService {
 
       // Create reminder
       const reminder = await Reminder.create({
-        studentId: fee.studentId._id,
+        studentId: fee.studentId?._id,
         month: currentMonth,
         year: currentYear,
         triggerDate,
@@ -87,7 +87,7 @@ class ReminderService {
 
       // Check if reminder already exists
       const existingReminder = await Reminder.findOne({
-        studentId: dueRecord.studentId._id,
+        studentId: dueRecord.studentId?._id,
         month: month - 1, // Convert to 0-indexed
         year,
         type: ReminderType.DUE,
@@ -97,7 +97,7 @@ class ReminderService {
 
       // Create reminder
       const reminder = await Reminder.create({
-        studentId: dueRecord.studentId._id,
+        studentId: dueRecord.studentId?._id,
         month: month - 1,
         year,
         triggerDate: dueRecord.reminderDate,
@@ -137,7 +137,7 @@ class ReminderService {
     for (const reminder of reminders) {
       try {
         // Get student details including push subscriptions
-        const student = await Student.findById(reminder.studentId._id);
+        const student = await Student.findById(reminder.studentId?._id);
         if (!student) {
           results.failed++;
           continue;
@@ -151,7 +151,7 @@ class ReminderService {
 
         const notificationResults =
           await NotificationService.sendMultiChannelNotification({
-            studentId: reminder.studentId._id,
+            studentId: reminder.studentId?._id,
             studentName: reminder.studentId.name,
             email: reminder.studentId.email,
             title: reminder.title,
@@ -177,7 +177,7 @@ class ReminderService {
         // For DUE reminders, keep sending daily until payment is resolved
         if (reminder.type === ReminderType.DUE) {
           const dueRecord = await DueRecord.findOne({
-            studentId: reminder.studentId._id,
+            studentId: reminder.studentId?._id,
             resolved: false,
           });
 

@@ -30,7 +30,6 @@ import { Admin } from "../models/admin.model.js";
 // Multi-role authentication: tries Student then Admin
 const verifyAnyJWT = asyncHandler(async (req, res, next) => {
   const token =
-    req.cookies?.studentAccessToken ||
     req.cookies?.accessToken ||
     req.header("Authorization")?.replace("Bearer ", "");
 

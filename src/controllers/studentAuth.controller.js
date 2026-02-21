@@ -559,20 +559,25 @@ export const resetPassword = asyncHandler(async (req, res) => {
 });
 
 export const getStudentProfile = asyncHandler(async (req, res) => {
+  const FeeService = (await import("../services/fee.service.js")).default;
   const student = await Student.findById(req.student._id)
     .populate({
       path: "slotId",
       select: "name timeRange monthlyFee totalSeats",
     })
-    .select("-password -otpHash -otpExpiresAt -otpPurpose");
+    .select("-password -otpHash -otpExpiresAt -otpPurpose")
+    .lean();
 
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
 
+  // Include financial summary for a complete SaaS profile experience
+  const feeSummary = await FeeService.getStudentFeeSummary(req.student._id);
+
   return res
     .status(200)
-    .json(new ApiResponse(200, student, "Student profile fetched"));
+    .json(new ApiResponse(200, { ...student, feeSummary }, "Student profile fetched"));
 });
 
 export const updateStudentProfile = asyncHandler(async (req, res) => {

@@ -74,8 +74,11 @@ const errorHandler = (err, req, res, next) => {
       statusCode: 500,
     });
   } else if (statusCode >= 400) {
-    // Log all client errors (4xx)
-    logger.warn(`${req.method} ${req.path} - ${statusCode}: ${message}`);
+    // Log all client errors (4xx) and internal errors (5xx)
+    const logMethod = statusCode >= 500 ? "error" : "warn";
+    logger[logMethod](`${req.method} ${req.path} - ${statusCode}: ${message}`, {
+      stack: statusCode >= 500 ? err.stack : undefined,
+    });
   }
 
   res.status(statusCode).json({

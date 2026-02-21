@@ -264,7 +264,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
             phone: student.phone,
             fcmToken: student.fcmToken,
             webPushSubscription: student.webPushSubscription,
-            sentBy: userId,
+            sentBy: adminId,
           },
         });
       results.all = multiChannelResult;
@@ -307,7 +307,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
         {
           type: "PAYMENT_DUE",
           studentId: student._id.toString(),
-          sentBy: userId?.toString(),
+          sentBy: adminId?.toString(),
         },
       );
     } else if (channel === "in-app") {

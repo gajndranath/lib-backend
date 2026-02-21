@@ -76,36 +76,43 @@ export const sendFCMNotification = async (token, notification, data = {}) => {
       },
       data: {
         ...data,
-        click_action: "FLUTTER_NOTIFICATION_CLICK",
-        sound: "default",
-      },
-      android: {
-        priority: "high",
-        notification: {
-          sound: "default",
-          channelId: "library_alerts",
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: "default",
-            badge: 1,
-          },
-        },
+        notification_title: notification.title,
+        notification_body: notification.body,
+        click_action: "/",
       },
       webpush: {
+        notification: {
+          title: notification.title,
+          body: notification.body,
+          icon: "/icon.png",
+          badge: "/icon.png",
+          vibrate: [200, 100, 200],
+          requireInteraction: true,
+          actions: [
+            {
+              action: "view",
+              title: "View App"
+            }
+          ]
+        },
+        fcmOptions: {
+          link: "/",
+        },
         headers: {
           Urgency: "high",
         },
       },
     };
 
+    console.debug(`[FCM] Sending message to token: ${token.substring(0, 10)}...`);
+    console.debug(`[FCM] Payload:`, JSON.stringify(message, null, 2));
+    
     const response = await admin.messaging().send(message);
-    console.log("✅ FCM notification sent:", response);
+    console.log("✅ FCM notification sent successfully. Response:", response);
     return { success: true, messageId: response };
   } catch (error) {
     console.error("❌ FCM notification error:", error.message);
+    if (error.stack) console.error(error.stack);
 
     // Handle specific errors
     if (error.code === "messaging/registration-token-not-registered") {
