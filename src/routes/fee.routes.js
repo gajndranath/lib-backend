@@ -12,6 +12,7 @@ import {
   getDashboardPaymentStatus,
   getReceiptDetails,
   downloadReceiptPDF,
+  getStudentFeeCalendar,
 } from "../controllers/student.controller.js";
 
 const router = Router();
@@ -26,6 +27,9 @@ router.route("/summary/:studentId").get(getFeeSummary);
 
 // Get dashboard payment status
 router.route("/dashboard-status").get(getDashboardPaymentStatus);
+
+// ✅ Get full-year calendar for a student (admin view)
+router.route("/calendar/:studentId").get(getStudentFeeCalendar);
 
 // Get receipt details (admin)
 router

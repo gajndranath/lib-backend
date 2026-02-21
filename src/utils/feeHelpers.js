@@ -211,3 +211,41 @@ export const isOverdue = (billingDate, graceDays = 1) => {
 export const roundFeeAmount = (amount) => {
   return Math.round(amount * 100) / 100;
 };
+
+/**
+ * Get the due date for a fee month.
+ * Policy: Fee is due by the 5th of the FOLLOWING month.
+ * e.g. Feb fee (month=1) is due by March 5th.
+ * @param {number} month - Fee month (0-11)
+ * @param {number} year  - Fee year
+ * @returns {Date}
+ */
+export const getFeeDueDate = (month, year) => {
+  // Next month, 5th day
+  const dueMonth = month === 11 ? 0 : month + 1;
+  const dueYear  = month === 11 ? year + 1 : year;
+  const d = new Date(dueYear, dueMonth, 5);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+/**
+ * Calculate how many days a fee is overdue.
+ * Returns 0 if PAID, or if due date hasn't passed yet.
+ * @param {number} month  - Fee month (0-11)
+ * @param {number} year   - Fee year
+ * @param {string} status - 'PAID' | 'DUE' | 'PENDING'
+ * @returns {number} Days overdue (0 = not overdue or paid)
+ */
+export const getDaysOverdue = (month, year, status) => {
+  if (status === 'PAID') return 0;
+  const dueDate = getFeeDueDate(month, year);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+  return Math.max(0, diff);
+};
+
+
+
+

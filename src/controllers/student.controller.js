@@ -5,6 +5,8 @@ import StudentService from "../services/student.service.js";
 import FeeService from "../services/fee.service.js";
 import StudentNotificationService from "../services/studentNotification.service.js";
 import { studentRegistrationSchema } from "../utils/validators.js";
+import { StudentMonthlyFee } from "../models/studentMonthlyFee.model.js";
+import { getDaysOverdue, getFeeDueDate, getMonthName } from "../utils/feeHelpers.js";
 
 export const registerStudent = asyncHandler(async (req, res) => {
   // Validate input
@@ -351,3 +353,91 @@ export const downloadReceiptPDF = asyncHandler(async (req, res) => {
   );
   res.send(html);
 });
+
+// ✅ Get full year fee calendar for a student
+export const getStudentFeeCalendar = asyncHandler(async (req, res) => {
+  const { studentId } = req.params;
+  const { year } = req.query;
+
+  const targetYear = year ? parseInt(year) : new Date().getFullYear();
+
+  // Fetch all fee records for this student in the target year
+  const fees = await StudentMonthlyFee.find({
+    studentId,
+    year: targetYear,
+  })
+    .sort({ month: 1 })
+    .lean({ getters: true });
+
+  // Build a map keyed by month index (0-11)
+  const feeMap = new Map(fees.map((f) => [f.month, f]));
+
+  // Build 12-month calendar grid
+  const calendar = Array.from({ length: 12 }, (_, monthIndex) => {
+    const fee = feeMap.get(monthIndex);
+    if (fee) {
+      const total = (fee.baseFee || 0) + (fee.dueCarriedForwardAmount || 0);
+      return {
+        month: monthIndex,
+        year: targetYear,
+        label: `${getMonthName(monthIndex)} ${targetYear}`,
+        hasRecord: true,
+        status: fee.status,
+        baseFee: fee.baseFee || 0,
+        dueCarriedForward: fee.dueCarriedForwardAmount || 0,
+        totalAmount: total,
+        paidAmount: fee.paidAmount || 0,
+        remainingAmount: Math.max(0, total - (fee.paidAmount || 0)),
+        paymentDate: fee.paymentDate || null,
+        paymentMethod: fee.paymentMethod || null,
+        transactionId: fee.transactionId || null,
+        remarks: fee.remarks || null,
+        coveredByAdvance: fee.coveredByAdvance || false,
+        locked: fee.locked || false,
+        feeDueDate: getFeeDueDate(monthIndex, targetYear),
+        daysOverdue: getDaysOverdue(monthIndex, targetYear, fee.status),
+      };
+    }
+    return {
+      month: monthIndex,
+      year: targetYear,
+      label: `${getMonthName(monthIndex)} ${targetYear}`,
+      hasRecord: false,
+      status: "NO_RECORD",
+      baseFee: 0,
+      dueCarriedForward: 0,
+      totalAmount: 0,
+      paidAmount: 0,
+      remainingAmount: 0,
+      paymentDate: null,
+      paymentMethod: null,
+      transactionId: null,
+      remarks: null,
+      coveredByAdvance: false,
+      locked: false,
+      feeDueDate: getFeeDueDate(monthIndex, targetYear),
+      daysOverdue: 0,
+    };
+  });
+
+  // Summary for the year
+  const recordedFees = calendar.filter((c) => c.hasRecord);
+  const summary = {
+    year: targetYear,
+    totalPaid: recordedFees.reduce((s, c) => s + c.paidAmount, 0),
+    totalDue: recordedFees
+      .filter((c) => c.status === "DUE")
+      .reduce((s, c) => s + c.remainingAmount, 0),
+    totalPending: recordedFees
+      .filter((c) => c.status === "PENDING")
+      .reduce((s, c) => s + c.totalAmount, 0),
+    paidMonths: recordedFees.filter((c) => c.status === "PAID").length,
+    dueMonths: recordedFees.filter((c) => c.status === "DUE").length,
+    pendingMonths: recordedFees.filter((c) => c.status === "PENDING").length,
+  };
+
+  return res.status(200).json(
+    new ApiResponse(200, { calendar, summary, year: targetYear }, "Fee calendar retrieved"),
+  );
+});
+

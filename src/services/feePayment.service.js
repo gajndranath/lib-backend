@@ -134,6 +134,7 @@ class FeePaymentService {
         const AdvanceBalance = (await import("../models/advanceBalance.model.js"))
           .AdvanceBalance;
         const DueRecord = (await import("../models/dueRecord.model.js")).DueRecord;
+        const { getDaysOverdue, getFeeDueDate } = await import("../utils/feeHelpers.js");
 
         const student = await Student.findById(studentId)
           .select("name monthlyFee")
@@ -142,24 +143,21 @@ class FeePaymentService {
           throw new ApiError(404, "Student not found");
         }
 
+        // ✅ Fetch FULL history (no limit) sorted oldest → newest for carry-forward logic
         const monthlyFees = await StudentMonthlyFee.find({ studentId })
-          .select("status amount year month")
-          .sort({ year: -1, month: -1 })
-          .limit(12)
-          .lean();
+          .sort({ year: 1, month: 1 })
+          .lean({ getters: true }); // getters:true for virtual totalAmount
 
         const advanceBalance = await AdvanceBalance.findOne({ studentId })
-          .select("remainingAmount")
+          .select("remainingAmount totalAmount usedAmount")
           .lean();
         const dueRecord = await DueRecord.findOne({ studentId, resolved: false })
-          .select("totalDueAmount")
+          .select("totalDueAmount monthsDue reminderDate")
           .lean();
 
         // Aggregate totals
-        const allMonthlyFees = await StudentMonthlyFee.find({ studentId }).lean();
-        
-        const totalPaid = allMonthlyFees.reduce((sum, fee) => sum + (fee.paidAmount || 0), 0);
-        const totalPending = allMonthlyFees
+        const totalPaid = monthlyFees.reduce((sum, fee) => sum + (fee.paidAmount || 0), 0);
+        const totalPending = monthlyFees
           .filter(fee => fee.status === 'PENDING')
           .reduce((sum, fee) => sum + (fee.baseFee + (fee.dueCarriedForwardAmount || 0)), 0);
         const totalDue = dueRecord ? dueRecord.totalDueAmount : 0;
@@ -178,19 +176,32 @@ class FeePaymentService {
             totalPaid,
             totalDue,
             totalPending,
-            overallTotal: totalPaid + totalDue + totalPending
+            overallTotal: totalPaid + totalDue + totalPending,
           },
-          feeHistory: monthlyFees.map((fee) => ({
-            month: fee.month,
-            year: fee.year,
-            baseFee: fee.baseFee,
-            dueCarriedForward: fee.dueCarriedForwardAmount,
-            totalAmount: fee.totalAmount,
-            status: fee.status,
-            paidAmount: fee.paidAmount,
-            paymentDate: fee.paymentDate,
-            coveredByAdvance: fee.coveredByAdvance,
-          })),
+          // ✅ Full history with all fields for calendar + ledger + audit
+          feeHistory: monthlyFees.map((fee) => {
+            const total = (fee.baseFee || 0) + (fee.dueCarriedForwardAmount || 0);
+            const remaining = total - (fee.paidAmount || 0);
+            return {
+              month: fee.month,
+              year: fee.year,
+              baseFee: fee.baseFee,
+              dueCarriedForward: fee.dueCarriedForwardAmount || 0,
+              totalAmount: total,
+              paidAmount: fee.paidAmount || 0,
+              remainingAmount: Math.max(0, remaining),
+              status: fee.status,
+              paymentDate: fee.paymentDate || null,
+              paymentMethod: fee.paymentMethod || null,
+              transactionId: fee.transactionId || null,
+              remarks: fee.remarks || null,
+              coveredByAdvance: fee.coveredByAdvance || false,
+              locked: fee.locked || false,
+              // ✅ Due tracking
+              feeDueDate: getFeeDueDate(fee.month, fee.year),
+              daysOverdue: getDaysOverdue(fee.month, fee.year, fee.status),
+            };
+          }).reverse(), // Return newest first for display
           advance: advanceBalance
             ? {
                 totalAmount: advanceBalance.totalAmount,
