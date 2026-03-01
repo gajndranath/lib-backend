@@ -20,16 +20,16 @@ import FeeDueService from "./feeDue.service.js";
 class FeeService {
   // ─── Fee Generation ───────────────────────────────────────────────────────
 
-  static async generateMonthlyFees(month, year, adminId) {
-    return FeeGenerationService.generateMonthlyFees(month, year, adminId);
+  static async generateMonthlyFees(month, year, adminId, tenantId = null) {
+    return FeeGenerationService.generateMonthlyFees(month, year, adminId, tenantId);
   }
 
   static async ensureMonthlyFeeExists(studentId, month, year, adminId) {
     return FeeGenerationService.ensureMonthlyFeeExists(studentId, month, year, adminId);
   }
 
-  static async generatePersonalizedFees(adminId = null) {
-    return FeeGenerationService.generatePersonalizedFees(adminId);
+  static async generatePersonalizedFees(adminId = null, tenantId = null) {
+    return FeeGenerationService.generatePersonalizedFees(adminId, null, tenantId);
   }
 
   static async getStudentsWithOverduePayments(graceDays = 1) {
@@ -50,8 +50,8 @@ class FeeService {
     return FeePaymentService.getStudentFeeSummary(studentId);
   }
 
-  static async getDashboardPaymentStatus(month, year) {
-    return FeePaymentService.getDashboardPaymentStatus(month, year);
+  static async getDashboardPaymentStatus(month, year, tenantId = null) {
+    return FeePaymentService.getDashboardPaymentStatus(month, year, tenantId);
   }
 
   static async generateReceipt(studentId, month, year) {

@@ -101,13 +101,45 @@ export const verifyJWT = asyncHandler(async (req, _, next) => {
   }
 });
 
+export const verifyAnyJWT = asyncHandler(async (req, _, next) => {
+  try {
+    const token =
+      req.cookies?.accessToken ||
+      req.header("Authorization")?.replace("Bearer ", "");
+
+    if (!token) throw new ApiError(401, "AnyJWT: No token provided");
+    console.log("[Auth] verifyAnyJWT execution started");
+
+    const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    
+    // Check if it's an admin first
+    if (["ADMIN", "SUPER_ADMIN", "STAFF"].includes(decodedToken?.role)) {
+      const admin = await getAdminCached(decodedToken._id);
+      if (admin && admin.isActive) {
+        req.admin = admin;
+        req.userType = "Admin";
+        return next();
+      }
+    }
+
+    // fallback to student check
+    const student = await (await import("../models/student.model.js")).Student.findById(decodedToken?._id);
+    if (student) {
+      req.student = student;
+      req.userType = "Student";
+      return next();
+    }
+
+    throw new ApiError(401, "AnyJWT: Invalid Access Token or User Not Found");
+  } catch (error) {
+    throw new ApiError(401, error?.message || "Invalid access token");
+  }
+});
+
 export const authorizeRoles = (...roles) => {
   return (req, _, next) => {
-    if (!roles.includes(req.admin.role)) {
-      throw new ApiError(
-        403,
-        `Role: ${req.admin.role} is not allowed to access this resource`,
-      );
+    if (roles.length > 0 && !roles.includes(req.admin.role)) {
+      throw new ApiError(403, "Not authorized to access this resource");
     }
     next();
   };

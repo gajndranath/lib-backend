@@ -21,13 +21,18 @@ class FeeGenerationService {
    * Legacy monthly generation (runs on 1st of every month)
    * OPTIMIZED: Batch queries to avoid N+1 problems
    */
-  static async generateMonthlyFees(month, year, adminId) {
-    // Batch fetch all active students (lean for read-only)
-    const activeStudents = await Student.find({
+  static async generateMonthlyFees(month, year, adminId, tenantId = null) {
+    // Batch fetch all active students for this tenant
+    const studentFilter = {
       status: "ACTIVE",
       isDeleted: false,
-    })
-      .select("_id monthlyFee joiningDate")
+    };
+    if (tenantId) {
+      studentFilter.tenantId = tenantId;
+    }
+
+    const activeStudents = await Student.find(studentFilter)
+      .select("_id monthlyFee joiningDate tenantId")
       .lean();
 
     // Batch fetch all existing fee records for this month/year to avoid repeated queries
@@ -159,7 +164,7 @@ class FeeGenerationService {
    * Generate fee for students whose billing date is today or overdue
    * This runs daily and creates fees based on individual student billing cycles
    */
-  static async generatePersonalizedFees(adminId = null, studentId = null) {
+  static async generatePersonalizedFees(adminId = null, studentId = null, tenantId = null) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -171,6 +176,10 @@ class FeeGenerationService {
       isDeleted: false,
       nextBillingDate: { $lte: today },
     };
+
+    if (tenantId) {
+      filter.tenantId = tenantId;
+    }
 
     if (studentId) {
       filter._id = studentId;
@@ -307,21 +316,26 @@ class FeeGenerationService {
    * Get students whose payment is due (billing date passed + grace period)
    * Used for sending reminders to admin
    */
-  static async getStudentsWithOverduePayments(graceDays = 1) {
+  static async getStudentsWithOverduePayments(graceDays = 1, tenantId = null) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const graceDate = new Date(today);
     graceDate.setDate(graceDate.getDate() - graceDays);
 
+    const studentMatch = {
+      status: "ACTIVE",
+      isDeleted: false,
+      nextBillingDate: { $lte: graceDate },
+    };
+    if (tenantId) {
+      studentMatch.tenantId = tenantId;
+    }
+
     // Find students with PENDING fees past grace period
     const overdueStudents = await Student.aggregate([
       {
-        $match: {
-          status: "ACTIVE",
-          isDeleted: false,
-          nextBillingDate: { $lte: graceDate },
-        },
+        $match: studentMatch,
       },
       {
         $lookup: {
@@ -358,9 +372,9 @@ class FeeGenerationService {
    * Auto-mark pending fees as DUE after grace period
    * Runs daily via cron job
    */
-  static async autoMarkOverdueAsDue(graceDays = 1, adminId = null) {
+  static async autoMarkOverdueAsDue(graceDays = 1, adminId = null, tenantId = null) {
     const overdueStudents =
-      await this.getStudentsWithOverduePayments(graceDays);
+      await this.getStudentsWithOverduePayments(graceDays, tenantId);
 
     const results = {
       marked: 0,

@@ -20,6 +20,7 @@ import {
   editMessage,
   deleteMessage,
   forwardMessage,
+  markConversationAsRead,
 } from "../controllers/chat.controller.js";
 
 const router = Router();
@@ -59,6 +60,10 @@ router
 router
   .route("/conversations/:conversationId/messages")
   .get(apiLimiter, listMessages);
+
+router
+  .route("/conversations/:conversationId/read")
+  .post(apiLimiter, markConversationAsRead);
 
 // Message sending - high rate limit (chat specific)
 router.route("/messages").post(chatLimiter, sendMessage);

@@ -252,14 +252,19 @@ class FeePaymentService {
   /**
    * Calculate payment status for dashboard
    */
-  static async getDashboardPaymentStatus(month, year) {
+  static async getDashboardPaymentStatus(month, year, tenantId = null) {
     const Student = (await import("../models/student.model.js")).Student;
-    // 1. Fetch all ACTIVE students who should have a fee for this month
-    const activeStudents = await Student.find({
+    // 1. Fetch all ACTIVE students for THIS tenant who should have a fee for this month
+    const studentFilter = {
       status: "ACTIVE",
       isDeleted: false,
-    })
-      .select("name status monthlyFee joiningDate")
+    };
+    if (tenantId) {
+      studentFilter.tenantId = tenantId;
+    }
+    
+    const activeStudents = await Student.find(studentFilter)
+      .select("name status monthlyFee joiningDate tenantId")
       .lean();
 
     // 2. Fetch all existing fee records for this month/year

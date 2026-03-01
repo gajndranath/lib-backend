@@ -57,20 +57,24 @@ const chatMessageSchema = new Schema(
     },
     contentType: {
       type: String,
-      enum: ["TEXT", "CALL"],
+      enum: ["TEXT", "CALL", "IMAGE"],
       default: "TEXT",
+    },
+    content: {
+      type: String,
+      trim: true,
     },
     encryptedForRecipient: {
       type: encryptedPayloadSchema,
-      required: true,
+      required: false, // Made optional for Instagram-style
     },
     encryptedForSender: {
       type: encryptedPayloadSchema,
-      required: true,
+      required: false, // Made optional for Instagram-style
     },
     senderPublicKey: {
       type: String,
-      required: true,
+      required: false, // Made optional for Instagram-style
       trim: true,
     },
     status: {
@@ -99,6 +103,7 @@ const chatMessageSchema = new Schema(
         editedAt: Date,
         encryptedForRecipient: encryptedPayloadSchema,
         encryptedForSender: encryptedPayloadSchema,
+        content: String, // Added for plain-text history support
       },
     ],
     isDeleted: {
@@ -112,6 +117,23 @@ const chatMessageSchema = new Schema(
       },
       senderName: String,
     },
+    reactions: [
+      {
+        userId: {
+          type: Schema.Types.ObjectId,
+          required: true,
+        },
+        userType: {
+          type: String,
+          required: true,
+          enum: ["Student", "Admin"],
+        },
+        emoji: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
     // For offline queue support
     isQueued: {
       type: Boolean,
@@ -120,6 +142,20 @@ const chatMessageSchema = new Schema(
     retryCount: {
       type: Number,
       default: 0,
+    },
+    callMetadata: {
+      callStatus: {
+        type: String,
+        enum: ["MISSED", "COMPLETED", "REJECTED", "CANCELLED"],
+      },
+      duration: {
+        type: Number, // in seconds
+      },
+      callType: {
+        type: String,
+        enum: ["AUDIO", "VIDEO"],
+        default: "AUDIO",
+      },
     },
     tenantId: {
       type: Schema.Types.ObjectId,
@@ -148,11 +184,11 @@ const wrapPayloadAtRest = (payload, secret) => {
   };
 };
 
-chatMessageSchema.pre("save", function (next) {
+chatMessageSchema.pre("save", async function () {
   const secret =
     process.env.MESSAGE_AT_REST_SECRET || process.env.ACCESS_TOKEN_SECRET;
 
-  if (!secret) return next();
+  if (!secret) return;
 
   if (this.encryptedForRecipient) {
     this.encryptedForRecipient = wrapPayloadAtRest(
@@ -178,8 +214,6 @@ chatMessageSchema.pre("save", function (next) {
       encryptedForSender: wrapPayloadAtRest(entry.encryptedForSender, secret),
     }));
   }
-
-  next();
 });
 
 chatMessageSchema.index({ conversationId: 1, createdAt: -1 });

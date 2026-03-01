@@ -22,6 +22,14 @@ const adminSchema = new Schema(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Please enter a valid email"],
     },
+    fullName: {
+      type: String,
+      trim: true,
+    },
+    profilePicture: {
+      type: String,
+      trim: true,
+    },
     phone: {
       type: String,
       trim: true,
@@ -137,6 +145,8 @@ adminSchema.methods.generateAccessToken = function () {
       role: this.role,
       userType: "Admin",
       username: this.username,
+      fullName: this.fullName,
+      profilePicture: this.profilePicture,
       tenantId: this.tenantId,
     },
     process.env.ACCESS_TOKEN_SECRET,

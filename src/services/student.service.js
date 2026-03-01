@@ -1,4 +1,6 @@
 import { Student } from "../models/student.model.js";
+import { Friendship } from "../models/friendship.model.js";
+import { Library } from "../models/library.model.js";
 import { AdminActionLog } from "../models/adminActionLog.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import cacheService from "../utils/cache.js";
@@ -21,7 +23,7 @@ class StudentService {
    * - Creates billing immediately
    * - Status can be ACTIVE
    */
-  static async registerStudent(studentData, adminId) {
+  static async registerStudent(studentData, adminId, tenantId) {
     try {
       // ✅ Check email uniqueness (if provided)
       if (studentData.email) {
@@ -58,9 +60,11 @@ class StudentService {
         ...studentData,
         libraryId,
         createdBy: adminId,
+        tenantId,
         emailVerified,
       });
 
+      // ✅ Monthly fee record generation moved to ensureMonthlyFeeExists loop
       // ✅ Generate initial fee record for current month
       try {
         const currentDate = new Date();
@@ -331,19 +335,42 @@ class StudentService {
     const skip = (page - 1) * limit;
 
     // Build search filter
-    const filter = { isDeleted: false };
+    // 1. Soft-delete logic: Include isDeleted if specifically ARCHIVED or if includeArchived flag is set
+    const filter = { 
+      isDeleted: query.status === "ARCHIVED" || query.includeArchived === "true" || query.includeArchived === true 
+    };
 
-    if (query.search) {
-      const searchRegex = new RegExp(query.search, "i");
-      filter.$or = [
-        { name: searchRegex },
-        { phone: searchRegex },
-        { email: searchRegex },
-        { fatherName: searchRegex },
-      ];
+    const criteria = [];
+
+    // 2. Multi-tenancy logic: Lenient filter to support legacy records missing tenantId
+    if (query.tenantId) {
+      criteria.push({
+        $or: [
+          { tenantId: query.tenantId },
+          { tenantId: { $exists: false } }
+        ]
+      });
     }
 
-    if (query.status) {
+    // 3. Search Filter
+    if (query.search) {
+      const searchRegex = new RegExp(query.search, "i");
+      criteria.push({
+        $or: [
+          { name: searchRegex },
+          { phone: searchRegex },
+          { email: searchRegex },
+          { fatherName: searchRegex },
+        ]
+      });
+    }
+
+    if (criteria.length > 0) {
+      filter.$and = criteria;
+    }
+
+    // 4. Status and Slot Filters
+    if (query.status && query.status !== "ALL") {
       filter.status = query.status;
     }
 
@@ -372,12 +399,21 @@ class StudentService {
     // Attach fee summary for each student in the current page
     const students = await Promise.all(
       studentsRaw.map(async (student) => {
-        const summary = await FeeService.getStudentFeeSummary(student._id);
-        return {
-          ...student,
-          totalDue: summary?.totals?.totalDue || 0,
-          totalPaid: summary?.totals?.totalPaid || 0,
-        };
+        try {
+          const summary = await FeeService.getStudentFeeSummary(student._id);
+          return {
+            ...student,
+            totalDue: summary?.totals?.totalDue || 0,
+            totalPaid: summary?.totals?.totalPaid || 0,
+          };
+        } catch (error) {
+          console.error(`[WARN] Failed to fetch fee summary for student ${student._id}:`, error.message);
+          return {
+            ...student,
+            totalDue: 0,
+            totalPaid: 0,
+          };
+        }
       }),
     );
 
@@ -451,6 +487,67 @@ class StudentService {
     });
 
     return student;
+  }
+
+  /**
+   * Search peers for Social Hub
+   * - Respects privacySettings.showInSearch
+   * - Filters by slot, room, name
+   * - Returns only public fields
+   */
+  static async searchPeers(studentId, query, tenantId, enforcedSlotId = null) {
+    const { search, slotId, page = 1, limit = 20 } = query;
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const filter = {
+      _id: { $ne: studentId }, // Exclude self
+      tenantId,
+      status: "ACTIVE",
+      isDeleted: false,
+      "privacySettings.showInSearch": { $ne: false },
+    };
+
+    // If enforcedSlotId is provided (e.g. for student-only same-slot rule), use it
+    if (enforcedSlotId) {
+      filter.slotId = enforcedSlotId;
+    } else if (slotId) {
+      // Otherwise allow manual slot filtering (e.g. for Admin if they ever use this)
+      filter.slotId = slotId;
+    }
+
+    if (criteria.length > 0) {
+      filter.$and = criteria;
+    }
+
+    const [students, total] = await Promise.all([
+      Student.find(filter)
+        .select("name libraryId slotId seatNumber joiningDate privacySettings")
+        .populate({
+          path: "slotId",
+          select: "name roomId",
+          populate: { path: "roomId", select: "name" },
+        })
+        .sort({ name: 1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      Student.countDocuments(filter),
+    ]);
+
+    return {
+      students: students.map((s) => ({
+        ...s,
+        slotName: s.privacySettings?.showSlot !== false ? s.slotId?.name : "Hidden",
+        roomName: s.privacySettings?.showSlot !== false ? s.slotId?.roomId?.name : "Hidden",
+        slotId: s.privacySettings?.showSlot !== false ? s.slotId?._id : null,
+      })),
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+      },
+    };
   }
 }
 

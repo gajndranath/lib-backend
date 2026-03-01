@@ -192,6 +192,8 @@ const updateOwnProfile = asyncHandler(async (req, res) => {
   if (username) updateData.username = username;
   if (email) updateData.email = email;
   if (phone !== undefined) updateData.phone = phone;
+  if (req.body.fullName !== undefined) updateData.fullName = req.body.fullName;
+  if (req.body.profilePicture !== undefined) updateData.profilePicture = req.body.profilePicture;
 
   // Check if email or username already exists (if being changed)
   if (email && email !== req.admin.email) {

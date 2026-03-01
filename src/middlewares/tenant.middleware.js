@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Library } from "../models/library.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -18,7 +19,7 @@ export const resolveTenant = asyncHandler(async (req, res, next) => {
   const jwtTenantId =
     req.admin?.tenantId?.toString() || req.student?.tenantId?.toString();
 
-  if (jwtTenantId) {
+  if (jwtTenantId && mongoose.Types.ObjectId.isValid(jwtTenantId)) {
     req.tenantId = jwtTenantId;
     return next();
   }
@@ -26,14 +27,26 @@ export const resolveTenant = asyncHandler(async (req, res, next) => {
   // 2. From explicit header (API clients, mobile apps)
   const headerTenantId = req.headers["x-tenant-id"];
   if (headerTenantId) {
-    req.tenantId = headerTenantId;
-    return next();
+    if (mongoose.Types.ObjectId.isValid(headerTenantId)) {
+      req.tenantId = headerTenantId;
+      return next();
+    } else {
+      // If not a valid ObjectId, treat it as a slug or some identifier
+      const library = await Library.findOne({ 
+        $or: [{ slug: headerTenantId }, { libraryId: headerTenantId }],
+        isActive: true 
+      }).select("_id").lean();
+      
+      if (library) {
+        req.tenantId = library._id.toString();
+        return next();
+      }
+    }
   }
 
   // 3. From subdomain (e.g. "koramangala.librarya.app")
   const host = req.hostname || "";
   const parts = host.split(".");
-  // Only treat as slug if it's a subdomain (at least 3 parts: slug.domain.tld)
   if (parts.length >= 3) {
     const slug = parts[0];
     if (slug && slug !== "www" && slug !== "api") {
@@ -47,10 +60,18 @@ export const resolveTenant = asyncHandler(async (req, res, next) => {
     }
   }
 
-  // No tenant resolved — reject
+  // 4. Fallback for Development
+  if (process.env.NODE_ENV === "development") {
+    const library = await Library.findOne({ isActive: true }).select("_id").lean();
+    if (library) {
+      req.tenantId = library._id.toString();
+      return next();
+    }
+  }
+
   throw new ApiError(
     400,
-    "Tenant could not be resolved. Provide X-Tenant-ID header or use a tenant subdomain.",
+    "Tenant could not be resolved. Provide valid X-Tenant-ID header or use a tenant subdomain.",
   );
 });
 

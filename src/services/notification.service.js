@@ -142,6 +142,46 @@ class NotificationService {
       return results;
     }
   }
+  
+  /**
+   * Send call notification (push alert for incoming call)
+   */
+  static async sendCallNotification({
+    recipientId,
+    recipientType,
+    callerName,
+    conversationId,
+    tenantId
+  }) {
+    const title = `Incoming Call from ${callerName}`;
+    const message = "Someone is calling you...";
+    const results = { push: null, skipped: false };
+
+    try {
+      const Model = recipientType === "Admin"
+        ? (await import("../models/admin.model.js")).Admin
+        : (await import("../models/student.model.js")).Student;
+
+      const recipient = await Model.findById(recipientId);
+      if (!recipient?.fcmToken) return results;
+
+      results.push = await this.sendFCMPush(
+        recipient.fcmToken,
+        { title, body: message },
+        { 
+          type: "INCOMING_CALL", 
+          callerName, 
+          conversationId: conversationId.toString(),
+          tenantId: tenantId.toString()
+        }
+      );
+
+      return results;
+    } catch (error) {
+      console.error("sendCallNotification error:", error);
+      return results;
+    }
+  }
 
   /**
    * Send announcement notification (in-app + push)
@@ -241,6 +281,24 @@ class NotificationService {
       console.error("Admin notification error:", error);
       return { success: false, error: error.message };
     }
+  }
+
+  /**
+   * Broadcast FCM Push to multiple students
+   */
+  static async broadcastFCMPush(tokens, title, message, data = {}) {
+    if (!tokens || tokens.length === 0) return { success: true, count: 0 };
+    
+    // FCM supports multicast (up to 500 tokens at once)
+    const results = await Promise.all(
+        tokens.map(token => this.sendFCMPush(token, { title, body: message }, data))
+    );
+    
+    return {
+        success: true,
+        total: tokens.length,
+        successful: results.filter(r => r?.success).length
+    };
   }
 
   /**

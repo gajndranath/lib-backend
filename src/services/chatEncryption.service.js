@@ -17,7 +17,8 @@ class ChatEncryptionService {
     if (!ciphertext || typeof ciphertext !== "string") return false;
     try {
       const buf = Buffer.from(ciphertext, "hex");
-      return buf.length >= 48;
+      // 24 (nonce) + 16 (overhead) = 40 bytes minimum
+      return buf.length >= 40;
     } catch {
       return false;
     }

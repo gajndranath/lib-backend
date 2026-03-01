@@ -3,11 +3,13 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import ChatService from "../services/chat.service.js";
 import { ChatMessage } from "../models/chatMessage.model.js";
+import { ChatConversation } from "../models/chatConversation.model.js";
 import { Admin } from "../models/admin.model.js";
 import { Student } from "../models/student.model.js";
 import ChatEncryptionService from "../services/chatEncryption.service.js";
 import ChatKeyService from "../services/chatKey.service.js";
 import cacheService from "../utils/cache.js";
+import logger from "../utils/logger.js";
 import { UserKeyBackup } from "../models/userKeyBackup.model.js";
 
 const isKeyBackupDisabled = () => process.env.DISABLE_KEY_BACKUP === "true";
@@ -24,10 +26,10 @@ export const setAdminPublicKey = asyncHandler(async (req, res) => {
       publicKeyRotatedAt: new Date(),
     });
   } else {
-    await Admin.findByIdAndUpdate(req.admin._id, { publicKey });
+    await Admin.findByIdAndUpdate(req.admin._id, { publicKey }, { new: true });
   }
-  await cacheService.del(`chat:admin:pk:${req.admin._id}`);
-  return res.status(200).json(new ApiResponse(200, null, "Public key updated"));
+  await cacheService.del(`chat:admin:pk:${req.admin._id.toString()}`);
+  return res.status(200).json(new ApiResponse(200, publicKey, "Public key updated"));
 });
 
 export const setAdminKeyBackup = asyncHandler(async (req, res) => {
@@ -160,7 +162,7 @@ export const getPublicKey = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { publicKey }, "Public key"));
+    .json(new ApiResponse(200, publicKey, "Public key"));
 });
 
 // ========== CONVERSATION-BASED PUBLIC KEY MANAGEMENT ==========
@@ -203,7 +205,7 @@ export const getConversationPublicKey = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { publicKey }, "Public key"));
+    .json(new ApiResponse(200, publicKey, "Public key"));
 });
 
 // ========== CONVERSATION MANAGEMENT ==========
@@ -214,9 +216,25 @@ export const createOrGetConversation = asyncHandler(async (req, res) => {
     throw new ApiError(400, "recipientId and recipientType are required");
   }
 
+  let effectiveTenantId = req.tenantId;
+
+  // For Student recipients, ALWAYS use the student's own library/tenantId 
+  // to ensure conversation IDs match between Admin and Student.
+  if (recipientType === "Student") {
+    const student = await Student.findById(recipientId).select("tenantId");
+    if (student?.tenantId) {
+      effectiveTenantId = student.tenantId.toString();
+      logger.debug("[Chat] Overriding Admin tenantId with Student's home library", { 
+        studentId: recipientId, 
+        tenantId: effectiveTenantId 
+      });
+    }
+  }
+
   const conversation = await ChatService.getOrCreateConversation(
     { userId: req.admin._id, userType: "Admin" },
     { userId: recipientId, userType: recipientType },
+    effectiveTenantId,
   );
 
   return res
@@ -225,30 +243,54 @@ export const createOrGetConversation = asyncHandler(async (req, res) => {
 });
 
 export const listConversations = asyncHandler(async (req, res) => {
-  const conversations = await ChatService.listConversations(
-    req.admin._id,
-    "Admin",
-  );
+  // For Admins (especially SUPER_ADMIN), we search for ALL conversations they are part of,
+  // regardless of which tenantId the conversation was initialized under.
+  const query = {
+    participants: {
+      $elemMatch: { userId: req.admin._id, userType: "Admin" },
+    },
+    isActive: true,
+  };
+
+  // Only apply tenant filter for regular STAFF if required, 
+  // but for global chat, participation is the primary filter.
+  if (req.admin.role !== "SUPER_ADMIN") {
+     query.tenantId = req.tenantId;
+  }
+
+  const conversations = await ChatConversation.find(query)
+    .sort({ lastMessageAt: -1, updatedAt: -1 })
+    .populate("participants.userId", "name username fullName profilePicture role")
+    .lean();
+
+  const mappedConversations = conversations.map((conv) => ({
+    ...conv,
+    participants: conv.participants.map((p) => ({
+      participantId: p.userId?._id || p.userId,
+      participantType: p.userType,
+      name: p.userId?.fullName || p.userId?.name || p.userId?.username || (p.userType === "Admin" ? "Library Admin" : "Unknown User"),
+      profilePicture: p.userId?.profilePicture,
+      role: p.userId?.role,
+    })),
+  }));
 
   const unread = await ChatMessage.aggregate([
     {
       $match: {
         recipientId: req.admin._id,
         status: { $ne: "READ" },
+        tenantId: req.tenantId,
       },
     },
     { $group: { _id: "$conversationId", count: { $sum: 1 } } },
   ]);
 
   const unreadMap = new Map(unread.map((u) => [u._id.toString(), u.count]));
-
-  const payload = conversations.map((c) => {
-    const data = c.toObject ? c.toObject() : c;
-    return {
-      ...data,
-      unreadCount: unreadMap.get(c._id.toString()) || 0,
-    };
-  });
+  
+  const payload = mappedConversations.map((c) => ({
+    ...c,
+    unreadCount: unreadMap.get(c._id.toString()) || 0,
+  }));
 
   return res
     .status(200)
@@ -258,6 +300,21 @@ export const listConversations = asyncHandler(async (req, res) => {
 export const listMessages = asyncHandler(async (req, res) => {
   const { conversationId } = req.params;
   const { limit = 50, before } = req.query;
+
+  // Security: Ensure admin is a participant
+  // Security: Ensure admin is a participant
+  const conversation = await ChatConversation.findOne({
+    _id: conversationId,
+    participants: {
+      $elemMatch: { userId: req.admin._id, userType: "Admin" },
+    },
+    // We remove the strict tenantId check here because the Admin 
+    // might be responding to a student across libraries.
+  });
+
+  if (!conversation) {
+    throw new ApiError(403, "Not authorized to view these messages");
+  }
 
   const messages = await ChatService.listMessages(
     conversationId,
@@ -270,6 +327,24 @@ export const listMessages = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, messages, "Messages fetched"));
 });
 
+export const markConversationAsRead = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+
+  // Mark all messages as READ where recipient is CURRENT admin
+  await ChatMessage.updateMany(
+    {
+      conversationId,
+      recipientId: req.admin._id,
+      status: { $ne: "READ" },
+    },
+    {
+      $set: { status: "READ", readAt: new Date() },
+    },
+  );
+
+  return res.status(200).json(new ApiResponse(200, null, "Messages marked as read"));
+});
+
 export const sendMessage = asyncHandler(async (req, res) => {
   const {
     conversationId,
@@ -278,11 +353,26 @@ export const sendMessage = asyncHandler(async (req, res) => {
     encryptedForRecipient,
     encryptedForSender,
     senderPublicKey,
+    content,
     contentType,
   } = req.body;
 
   if (!conversationId || !recipientId || !recipientType) {
+    logger.warn("Missing required fields in sendMessage", { 
+      body: req.body,
+      conversationId, 
+      recipientId, 
+      recipientType 
+    });
     throw new ApiError(400, "Missing required fields");
+  }
+
+  let effectiveTenantId = req.tenantId;
+  if (recipientType === "Student") {
+    const student = await Student.findById(recipientId).select("tenantId");
+    if (student?.tenantId) {
+      effectiveTenantId = student.tenantId.toString();
+    }
   }
 
   const message = await ChatService.sendMessage({
@@ -294,8 +384,29 @@ export const sendMessage = asyncHandler(async (req, res) => {
     encryptedForRecipient,
     encryptedForSender,
     senderPublicKey,
+    content,
     contentType,
+    tenantId: effectiveTenantId,
   });
+
+  // Emit real-time message via socket
+  const io = req.app.get("io");
+  if (io) {
+    const recipientRoom = `${recipientType.toLowerCase()}_${recipientId}`;
+    const senderRoom = `admin_${req.admin._id}`;
+    logger.info("[HTTP] Real-time message emitted", { 
+      conversationId, 
+      recipientId, 
+      recipientType,
+      room: recipientRoom,
+      senderRoom,
+      ioFound: !!io
+    });
+    io.to(recipientRoom).emit("new_message", message);
+    io.to(senderRoom).emit("new_message", message); // Sync other admin tabs
+  } else {
+    logger.warn("[HTTP] Socket.io instance NOT found in req.app", { conversationId });
+  }
 
   return res.status(201).json(new ApiResponse(201, message, "Message sent"));
 });
@@ -309,7 +420,10 @@ export const editMessage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "encryptedPayload is required");
   }
 
-  const message = await ChatMessage.findById(messageId);
+  const message = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.tenantId,
+  });
   if (!message) {
     throw new ApiError(404, "Message not found");
   }
@@ -329,7 +443,7 @@ export const editMessage = asyncHandler(async (req, res) => {
   const previousSender = message.encryptedForSender;
 
   if (text) {
-    message.text = text;
+    message.content = text;
   }
 
   message.encryptedForRecipient = encryptedPayload;
@@ -355,7 +469,10 @@ export const editMessage = asyncHandler(async (req, res) => {
 export const deleteMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
 
-  const message = await ChatMessage.findById(messageId);
+  const message = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.tenantId,
+  });
   if (!message) {
     throw new ApiError(404, "Message not found");
   }
@@ -380,7 +497,10 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { text, encryptedPayload } = req.body;
 
-  const originalMessage = await ChatMessage.findById(messageId);
+  const originalMessage = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.tenantId,
+  });
   if (!originalMessage) {
     throw new ApiError(404, "Message not found");
   }
@@ -401,12 +521,13 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     senderType: "Admin",
     recipientId: originalMessage.recipientId,
     recipientType: originalMessage.recipientType,
-    text: text || originalMessage.text,
+    content: text || originalMessage.content,
     encryptedForRecipient: encryptedPayload,
     encryptedForSender: encryptedPayload,
     forwardedFrom: messageId,
     contentType: originalMessage.contentType || "TEXT",
     status: "SENT",
+    tenantId: req.tenantId,
   });
 
   await newMessage.save();

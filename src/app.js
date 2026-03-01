@@ -129,6 +129,7 @@ import feeRouter from "./routes/fee.routes.js";
 import reminderRouter from "./routes/reminder.routes.js";
 import libraryRouter from "./routes/library.routes.js";
 import expenseRouter from "./routes/expense.routes.js";
+import uploadRouter from "./routes/upload.routes.js";
 import attendanceRouter from "./routes/attendance.routes.js";
 import roomRouter from "./routes/room.routes.js";
 
@@ -139,6 +140,7 @@ app.use("/api/v1/admin", adminRouter);
 app.use("/api/v1/notification", notificationRouter);
 app.use("/api/v1/chat", chatRouter);
 app.use("/api/v1/student-chat", studentChatRouter);
+app.use("/api/v1/upload", uploadRouter);
 app.use("/api/v1/announcements", announcementRouter);
 app.use("/api/v1/student-announcements", studentAnnouncementRouter);
 app.use("/api/v1/slots", slotRouter);

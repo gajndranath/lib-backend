@@ -349,10 +349,18 @@ class NotificationTemplateService {
       // Send Email
       if (email) {
         try {
-          results.email = await sendEmail(email, title, message);
-          console.log(`✅ Email sent to ${email} for ${title}`);
+          const emailResult = await sendEmail(email, title, message);
+          results.email = emailResult;
+          if (emailResult.success) {
+            console.log(`✅ Email sent to ${email} for ${title}`);
+          } else {
+            console.error(
+              `❌ Email failed for ${email}:`,
+              emailResult.error || "Unknown error",
+            );
+          }
         } catch (error) {
-          console.error(`❌ Email failed for ${email}:`, error.message);
+          console.error(`❌ Email error for ${email}:`, error.message);
           results.email = { success: false, error: error.message };
         }
       }

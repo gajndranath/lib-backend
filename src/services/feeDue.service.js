@@ -88,6 +88,7 @@ class FeeDueService {
         totalDueAmount: monthlyFee.totalAmount,
         reminderDate,
         createdBy: adminId,
+        tenantId: monthlyFee.tenantId, // ✅ PERSIST TENANT
       });
     }
 
@@ -149,12 +150,15 @@ class FeeDueService {
       // Use the robust sync logic
       await this._syncTotalDue(dueRecord);
     } else {
+      // Find the fee to get tenantId
+      const fee = await StudentMonthlyFee.findOne({ studentId, month: parseMonthYearKey(monthKey).month, year: parseMonthYearKey(monthKey).year });
       dueRecord = await DueRecord.create({
         studentId,
         monthsDue: [monthKey],
         totalDueAmount: dueAmount,
         reminderDate: reminderDate || new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         createdBy: adminId,
+        tenantId: fee?.tenantId, // ✅ PERSIST TENANT
       });
     }
 

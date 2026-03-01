@@ -4,10 +4,13 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { FriendRequest } from "../models/friendRequest.model.js";
 import { StudentBlock } from "../models/studentBlock.model.js";
 import { Student } from "../models/student.model.js";
+import { Friendship } from "../models/friendship.model.js";
 import { getIO } from "../sockets/index.js";
+import StudentService from "../services/student.service.js";
+import { Library } from "../models/library.model.js";
 
 const ensureStudent = async (studentId) => {
-  const student = await Student.findById(studentId).select("_id name status");
+  const student = await Student.findById(studentId).select("_id name status slotId");
   if (!student || student.status !== "ACTIVE") {
     throw new ApiError(404, "Student not found");
   }
@@ -50,8 +53,13 @@ export const sendFriendRequest = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Cannot add yourself");
   }
 
-  await ensureStudent(recipientId);
+  const recipient = await ensureStudent(recipientId);
   await ensureNotBlocked(requesterId, recipientId);
+
+  // Enforce SAME SLOT rule
+  if (req.student.slotId?.toString() !== recipient.slotId?.toString()) {
+    throw new ApiError(403, "You can only add students from your same slot");
+  }
 
   const existing = await FriendRequest.findOne({
     $or: [
@@ -159,9 +167,20 @@ export const respondFriendRequest = asyncHandler(async (req, res) => {
   request.status = action === "accept" ? "ACCEPTED" : "REJECTED";
   await request.save();
 
-  // Emit real-time event to requester
+  // Create established friendship on accept
   if (action === "accept") {
     try {
+      await Friendship.findOneAndUpdate(
+        { 
+          $or: [
+            { studentA: request.requesterId, studentB: request.recipientId },
+            { studentA: request.recipientId, studentB: request.requesterId }
+          ]
+        },
+        { studentA: request.requesterId, studentB: request.recipientId },
+        { upsert: true, new: true }
+      );
+
       const io = getIO();
       const accepter = await Student.findById(studentId).select("name");
       io.to(`student_${request.requesterId}`).emit("friend-request:accepted", {
@@ -171,7 +190,7 @@ export const respondFriendRequest = asyncHandler(async (req, res) => {
         timestamp: new Date().toISOString(),
       });
     } catch (err) {
-      console.error("❌ Failed to emit friend-request:accepted:", err);
+      console.error("❌ Failed to finalize friendship or emit event:", err.message);
     }
   }
 
@@ -183,26 +202,55 @@ export const listFriends = asyncHandler(async (req, res) => {
 
   const blockedIds = await getBlockedIds(studentId);
 
-  const friends = await FriendRequest.find({
-    status: "ACCEPTED",
-    $or: [{ requesterId: studentId }, { recipientId: studentId }],
+  const friends = await Friendship.find({
+    $or: [{ studentA: studentId }, { studentB: studentId }],
   })
-    .populate("requesterId", "_id name")
-    .populate("recipientId", "_id name")
+    .populate("studentA", "_id name email phone libraryId")
+    .populate("studentB", "_id name email phone libraryId")
     .lean();
 
   const formatted = friends
     .map((f) => {
-      const isRequester =
-        f.requesterId?._id?.toString() === studentId.toString();
-      const other = isRequester ? f.recipientId : f.requesterId;
+      const other = f.studentA?._id?.toString() === studentId.toString() ? f.studentB : f.studentA;
       return {
         _id: other?._id,
         name: other?.name,
-        requestId: f._id,
+        email: other?.email,
+        phone: other?.phone,
+        libraryId: other?.libraryId,
+        bondedAt: f.bondedAt,
+        friendshipId: f._id,
+        userType: "Student",
       };
     })
     .filter((f) => f._id && !blockedIds.has(f._id.toString()));
+
+  // ✅ Prepend Library Admin as a default connection
+  try {
+    const tenantId = req.tenantId || req.student?.tenantId;
+    if (tenantId) {
+      const library = await Library.findById(tenantId).populate({
+        path: "ownerAdminId",
+        select: "_id username email phone"
+      });
+
+      const admin = library?.ownerAdminId;
+      if (admin) {
+        formatted.unshift({
+          _id: admin._id,
+          name: admin.username + " (Library Management)",
+          email: admin.email,
+          phone: admin.phone,
+          libraryId: "ADMIN",
+          bondedAt: library.createdAt || new Date(),
+          friendshipId: "admin-default",
+          userType: "Admin",
+        });
+      }
+    }
+  } catch (err) {
+    console.error("❌ Failed to fetch admin for default friendship:", err.message);
+  }
 
   return res
     .status(200)
@@ -215,8 +263,15 @@ export const removeFriend = asyncHandler(async (req, res) => {
 
   if (!friendId) throw new ApiError(400, "friendId is required");
 
-  const removed = await FriendRequest.findOneAndDelete({
-    status: "ACCEPTED",
+  const removed = await Friendship.findOneAndDelete({
+    $or: [
+      { studentA: studentId, studentB: friendId },
+      { studentA: friendId, studentB: studentId },
+    ],
+  });
+
+  // Also clean up any lingering request records
+  await FriendRequest.deleteMany({
     $or: [
       { requesterId: studentId, recipientId: friendId },
       { requesterId: friendId, recipientId: studentId },
@@ -304,4 +359,20 @@ export const listBlocked = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, formatted, "Blocked list fetched"));
+});
+
+export const searchPeers = asyncHandler(async (req, res) => {
+  const studentId = req.student._id;
+  const tenantId = req.tenantId || req.student?.tenantId;
+
+  const result = await StudentService.searchPeers(
+    studentId,
+    req.query,
+    tenantId,
+    req.student?.slotId,
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Peers fetched successfully"));
 });

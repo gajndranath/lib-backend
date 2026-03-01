@@ -19,6 +19,7 @@ import {
   editMessage,
   deleteMessage,
   forwardMessage,
+  markConversationAsRead,
 } from "../controllers/studentChat.controller.js";
 import {
   sendFriendRequest,
@@ -29,6 +30,7 @@ import {
   blockStudent,
   unblockStudent,
   listBlocked,
+  searchPeers,
 } from "../controllers/studentFriend.controller.js";
 
 const router = Router();
@@ -58,12 +60,14 @@ router
   .get(listConversations)
   .post(createOrGetConversation);
 router.route("/conversations/:conversationId/messages").get(listMessages);
+router.route("/conversations/:conversationId/read").post(markConversationAsRead);
 router.route("/messages").post(sendMessage);
 
 // ✅ Message edit, delete, forward - same as admin routes
 router.route("/messages/:messageId").put(editMessage).delete(deleteMessage);
 router.route("/messages/:messageId/forward").post(forwardMessage);
 
+router.route("/friends/search").get(searchPeers);
 router.route("/friends").get(listFriends);
 router.route("/friends/remove").post(removeFriend);
 router.route("/friends/block").post(blockStudent);

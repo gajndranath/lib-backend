@@ -102,7 +102,13 @@ export const getNotificationHistory = asyncHandler(async (req, res) => {
   if (!userId) {
     return res.status(401).json({ message: "Unauthorized: user not found" });
   }
-  const query = { userId };
+
+  // Filter out CHAT_MESSAGE and CALL from the dropdown/main feed to avoid redundancy
+  const query = { 
+    userId,
+    type: { $nin: ["CHAT_MESSAGE", "CALL"] } 
+  };
+  
   if (unreadOnly === "true") {
     query.read = false;
   }
@@ -169,7 +175,11 @@ export const markAllAsRead = asyncHandler(async (req, res) => {
     .default;
 
   await Notification.updateMany(
-    { userId: userId, read: false },
+    { 
+      userId: userId, 
+      read: false,
+      type: { $nin: ["CHAT_MESSAGE", "CALL"] }
+    },
     { $set: { read: true, readAt: new Date() } },
   );
 
@@ -298,6 +308,7 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
       if (!student.fcmToken) {
         throw new ApiError(400, "Student push token not available");
       }
+      
       results.push = await NotificationService.sendFCMPush(
         student.fcmToken,
         {
@@ -310,6 +321,20 @@ export const sendDirectNotification = asyncHandler(async (req, res) => {
           sentBy: adminId?.toString(),
         },
       );
+
+      // CRITICAL: Also create an in-app record so it shows up in the UI dropdown and triggers real-time socket
+      results.inApp = await NotificationService.sendInAppNotification({
+        userId: student._id,
+        title: notificationTitle,
+        message: notificationMessage,
+        type: "PAYMENT_DUE",
+        data: {
+          studentId: student._id,
+          sentBy: adminId,
+          sentVia: "push_override"
+        },
+      });
+      
     } else if (channel === "in-app") {
       results.inApp = await NotificationService.sendInAppNotification({
         userId: student._id,

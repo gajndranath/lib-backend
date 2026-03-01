@@ -175,6 +175,14 @@ const studentSchema = new Schema(
       ref: "Library",
       index: true,
     },
+
+    // Privacy Settings
+    privacySettings: {
+      showInSearch: { type: Boolean, default: true },
+      showSlot: { type: Boolean, default: true },
+      allowRequests: { type: Boolean, default: true },
+      showOnlineStatus: { type: Boolean, default: true },
+    },
   },
   {
     timestamps: true,

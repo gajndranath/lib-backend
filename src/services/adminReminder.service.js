@@ -118,13 +118,69 @@ class AdminReminderService {
       query.isPaused = filters.isPaused;
     }
 
-    const reminders = await AdminReminder.find(query)
+    let reminders = await AdminReminder.find(query)
       .populate("affectedStudents", "name studentId status")
       .populate("dueRecords")
       .sort({ "schedule.nextTriggerDate": 1, createdAt: -1 })
       .lean();
 
+    // Auto-initialize default reminders if none exist
+    if (reminders.length === 0 && !filters.type) {
+      await this.initializeDefaultReminders(adminId);
+      reminders = await AdminReminder.find(query)
+        .populate("affectedStudents", "name studentId status")
+        .populate("dueRecords")
+        .sort({ "schedule.nextTriggerDate": 1, createdAt: -1 })
+        .lean();
+    }
+
     return reminders;
+  }
+
+  /**
+   * Initialize default reminder engines for an admin
+   */
+  static async initializeDefaultReminders(adminId) {
+    const defaultReminders = [
+      {
+        adminId,
+        type: "END_OF_MONTH_DUE",
+        title: "Monthly Fee Reminder Engine",
+        message:
+          "Automatically monitors students who haven't paid fees before month-end and sends multi-channel notifications.",
+        schedule: {
+          type: "MONTHLY",
+          startDate: new Date(),
+        },
+        deliverVia: ["IN_APP", "EMAIL"],
+        isActive: true,
+      },
+      {
+        adminId,
+        type: "DUE_STUDENTS",
+        title: "Daily Overdue Monitor",
+        message:
+          "Actively tracks overdue fees and escalates notifications to parents and staff on a daily basis.",
+        schedule: {
+          type: "DAILY",
+          startDate: new Date(),
+        },
+        deliverVia: ["IN_APP", "PUSH"],
+        isActive: true,
+      },
+    ];
+
+    for (const reminderData of defaultReminders) {
+      const existing = await AdminReminder.findOne({
+        adminId,
+        type: reminderData.type,
+        isActive: true,
+      });
+
+      if (!existing) {
+        await AdminReminder.create(reminderData);
+      }
+    }
   }
 
   /**
@@ -360,7 +416,9 @@ class AdminReminderService {
               continue;
             }
 
-            const studentIds = dueStudents.map((f) => f.studentId?._id).filter(id => id);
+            const studentIds = dueStudents
+              .map((f) => f.studentId?._id)
+              .filter((id) => id);
 
             // Create end-of-month reminder
             const reminder = await AdminReminder.create({
@@ -442,7 +500,7 @@ class AdminReminderService {
       .lean();
 
     const totalDueAmount = dueStudents.reduce(
-      (sum, fee) => sum + fee.totalAmount,
+      (sum, fee) => sum + (fee.baseFee + (fee.dueCarriedForwardAmount || 0)),
       0,
     );
 
@@ -476,14 +534,28 @@ class AdminReminderService {
     const deliveryChannels = reminder.deliverVia || ["IN_APP"];
     const affectedStudents = reminder.affectedStudents || [];
 
+    // Debug log reminder info
+    console.log("[DEBUG] sendReminder called", {
+      reminderId,
+      title: reminder.title,
+      channels: deliveryChannels,
+      affectedStudents: affectedStudents.map((s) => ({
+        id: s._id,
+        name: s.name,
+        email: s.email,
+      })),
+    });
+
     // Send notifications to each affected student
     for (const student of affectedStudents) {
-      // Send via each channel
       for (const channel of deliveryChannels) {
         try {
           let result;
 
           if (channel === "IN_APP") {
+            console.log(
+              `[DEBUG] Sending IN_APP reminder to ${student.name} (${student._id})`,
+            );
             result = await NotificationService.sendInAppNotification({
               userId: student._id,
               title: reminder.title,
@@ -495,8 +567,10 @@ class AdminReminderService {
               },
             });
 
-            // Also send web push for PWA if available
             if (student.webPushSubscription) {
+              console.log(
+                `[DEBUG] Sending WEB_PUSH reminder to ${student.name} (${student._id})`,
+              );
               await NotificationService.sendWebPush(
                 student.webPushSubscription,
                 {
@@ -513,8 +587,10 @@ class AdminReminderService {
               );
             }
           } else if (channel === "EMAIL") {
-            // Send email notification
             if (student.email) {
+              console.log(
+                `[DEBUG] Sending EMAIL reminder to ${student.name} (${student.email})`,
+              );
               result = await NotificationService.sendMultiChannelNotification({
                 studentId: student._id,
                 studentName: student.name,
@@ -531,8 +607,10 @@ class AdminReminderService {
               });
             }
           } else if (channel === "PUSH") {
-            // Send push notification
             if (student.fcmToken) {
+              console.log(
+                `[DEBUG] Sending PUSH reminder to ${student.name} (${student._id})`,
+              );
               result = await NotificationService.sendFCMPush(
                 student.fcmToken,
                 {
@@ -548,7 +626,6 @@ class AdminReminderService {
             }
           }
 
-          // Log successful send
           reminder.notificationHistory.push({
             sentAt: new Date(),
             channel,
@@ -557,7 +634,7 @@ class AdminReminderService {
           });
         } catch (error) {
           console.error(
-            `Failed to send ${channel} reminder to student ${student._id}:`,
+            `[DEBUG] Failed to send ${channel} reminder to student ${student._id}:`,
             error,
           );
           reminder.notificationHistory.push({
@@ -615,7 +692,7 @@ class AdminReminderService {
     const records = await DueRecord.find({
       resolved: false,
       $or: [
-        { nextReminderDue: { $lte: now } },          // scheduled slot reached
+        { nextReminderDue: { $lte: now } }, // scheduled slot reached
         { nextReminderDue: null, reminderCount: 0 }, // brand new, never sent
       ],
     }).populate("studentId", "name email phone fcmToken webPushSubscription");
@@ -636,7 +713,8 @@ class AdminReminderService {
         record.updateEscalationLevel();
         const level = record.escalationLevel;
         const levelLabel = ESCALATION_LEVELS[level]?.label ?? "unknown";
-        const urgencyEmoji = ["🟢", "🟡", "🟠", "🔴", "🔴", "⛔"][level] ?? "🔴";
+        const urgencyEmoji =
+          ["🟢", "🟡", "🟠", "🔴", "🔴", "⛔"][level] ?? "🔴";
 
         // Build escalation-aware messages
         const daysLate = record.daysOverdue;
@@ -662,7 +740,10 @@ class AdminReminderService {
             },
           });
         } catch (e) {
-          console.error(`[Escalation] Failed to notify student ${student._id}:`, e.message);
+          console.error(
+            `[Escalation] Failed to notify student ${student._id}:`,
+            e.message,
+          );
         }
 
         // Notify admin — escalate to super-admin at level 5
@@ -672,7 +753,11 @@ class AdminReminderService {
 
           if (level >= 5) {
             // Super admin escalation — send system alert
-            await NotificationService.sendSystemAlert(adminTitle, adminMsg, "CRITICAL");
+            await NotificationService.sendSystemAlert(
+              adminTitle,
+              adminMsg,
+              "CRITICAL",
+            );
           } else {
             await NotificationService.sendAdminNotification(
               record.createdBy ?? null,
@@ -682,7 +767,10 @@ class AdminReminderService {
             );
           }
         } catch (e) {
-          console.error(`[Escalation] Failed to notify admin for record ${record._id}:`, e.message);
+          console.error(
+            `[Escalation] Failed to notify admin for record ${record._id}:`,
+            e.message,
+          );
         }
 
         // Advance escalation and save
@@ -697,12 +785,17 @@ class AdminReminderService {
           totalDueAmount: record.totalDueAmount,
         });
       } catch (err) {
-        console.error(`[Escalation] Error processing record ${record._id}:`, err.message);
+        console.error(
+          `[Escalation] Error processing record ${record._id}:`,
+          err.message,
+        );
         errors.push({ recordId: record._id, error: err.message });
       }
     }
 
-    console.log(`[Escalation] Processed ${records.length} records — Escalated: ${escalated.length}, Errors: ${errors.length}`);
+    console.log(
+      `[Escalation] Processed ${records.length} records — Escalated: ${escalated.length}, Errors: ${errors.length}`,
+    );
     return { processed: records.length, escalated, errors };
   }
 
@@ -719,18 +812,24 @@ class AdminReminderService {
     const today = new Date();
     // Target the previous month
     const targetMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-    const targetYear  = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+    const targetYear =
+      today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
 
-    console.log(`[AutoMark] Checking PENDING fees for ${getMonthName(targetMonth)} ${targetYear}...`);
+    console.log(
+      `[AutoMark] Checking PENDING fees for ${getMonthName(targetMonth)} ${targetYear}...`,
+    );
 
     // Find all PENDING fees for last month that haven't been locked/advance-covered
     const pendingFees = await StudentMonthlyFee.find({
       month: targetMonth,
-      year:  targetYear,
+      year: targetYear,
       status: "PENDING",
       coveredByAdvance: false,
       locked: false,
-    }).populate("studentId", "name email phone fcmToken webPushSubscription tenantId");
+    }).populate(
+      "studentId",
+      "name email phone fcmToken webPushSubscription tenantId",
+    );
 
     if (pendingFees.length === 0) {
       console.log("[AutoMark] No pending fees to mark as DUE.");
@@ -762,7 +861,7 @@ class AdminReminderService {
           }
           // Set dueSince to the earliest fee due date if not set
           if (!dueRecord.dueSince) dueRecord.dueSince = feeDueDate;
-          dueRecord.totalDueAmount += (fee.totalAmount - (fee.paidAmount || 0));
+          dueRecord.totalDueAmount += fee.totalAmount - (fee.paidAmount || 0);
           dueRecord.updateEscalationLevel();
           // Trigger first reminder immediately
           if (!dueRecord.nextReminderDue) {
@@ -788,7 +887,10 @@ class AdminReminderService {
 
         marked.push({ studentId, name: fee.studentId?.name });
       } catch (err) {
-        console.error(`[AutoMark] Error for student ${fee.studentId?._id}:`, err.message);
+        console.error(
+          `[AutoMark] Error for student ${fee.studentId?._id}:`,
+          err.message,
+        );
         errors.push({ studentId: fee.studentId?._id, error: err.message });
       }
     }
@@ -803,11 +905,16 @@ class AdminReminderService {
           "WARNING",
         );
       } catch (e) {
-        console.error("[AutoMark] Failed to send admin batch alert:", e.message);
+        console.error(
+          "[AutoMark] Failed to send admin batch alert:",
+          e.message,
+        );
       }
     }
 
-    console.log(`[AutoMark] Done. Marked: ${marked.length}, Errors: ${errors.length}`);
+    console.log(
+      `[AutoMark] Done. Marked: ${marked.length}, Errors: ${errors.length}`,
+    );
     return { marked: marked.length, errors };
   }
 }

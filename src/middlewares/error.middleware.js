@@ -29,6 +29,11 @@ const errorHandler = (err, req, res, next) => {
 
   // Handle Mongoose duplicate key error
   if (err.code === 11000) {
+    logger.error("DENSE_DEBUG: Duplicate Key Error detected", { 
+      keyPattern: err.keyPattern, 
+      keyValue: err.keyValue, 
+      collection: err.message.match(/collection: ([^ ]+)/)?.[1] || "unknown" 
+    });
     const field = Object.keys(err.keyPattern)[0];
     error = {
       statusCode: 400,

@@ -17,12 +17,16 @@ const announcementSchema = new Schema(
     },
     targetScope: {
       type: String,
-      enum: ["ALL_STUDENTS", "SLOT", "SPECIFIC_STUDENTS"],
+      enum: ["ALL_STUDENTS", "SLOT", "ROOM", "SPECIFIC_STUDENTS"],
       required: true,
     },
     slotId: {
       type: Schema.Types.ObjectId,
       ref: "Slot",
+    },
+    roomId: {
+      type: Schema.Types.ObjectId,
+      ref: "Room",
     },
     recipientIds: [{ type: Schema.Types.ObjectId, ref: "Student" }],
     recipientCiphertexts: [

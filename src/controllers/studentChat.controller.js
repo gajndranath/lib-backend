@@ -12,6 +12,7 @@ import ChatKeyService from "../services/chatKey.service.js";
 import cacheService from "../utils/cache.js";
 import logger from "../utils/logger.js";
 import { UserKeyBackup } from "../models/userKeyBackup.model.js";
+import { ChatConversation } from "../models/chatConversation.model.js";
 
 const isKeyBackupDisabled = () => process.env.DISABLE_KEY_BACKUP === "true";
 
@@ -142,7 +143,7 @@ export const getPublicKey = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { publicKey }, "Public key"));
+    .json(new ApiResponse(200, publicKey, "Public key"));
 });
 
 // ========== CONVERSATION-BASED PUBLIC KEY MANAGEMENT ==========
@@ -185,7 +186,7 @@ export const getConversationPublicKey = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { publicKey }, "Public key"));
+    .json(new ApiResponse(200, publicKey, "Public key"));
 });
 
 // ========== CONVERSATION MANAGEMENT ==========
@@ -231,6 +232,7 @@ export const createOrGetConversation = asyncHandler(async (req, res) => {
   const conversation = await ChatService.getOrCreateConversation(
     { userId: req.student._id, userType: "Student" },
     { userId: recipientId, userType: recipientType },
+    req.tenantId,
   );
 
   return res
@@ -242,36 +244,31 @@ export const listConversations = asyncHandler(async (req, res) => {
   const conversations = await ChatService.listConversations(
     req.student._id,
     "Student",
+    req.tenantId,
   );
 
-  const unread = await ChatMessage.aggregate([
-    {
-      $match: {
-        recipientId: req.student._id,
-        status: { $ne: "READ" },
-      },
-    },
-    { $group: { _id: "$conversationId", count: { $sum: 1 } } },
-  ]);
-
-  const unreadMap = new Map(unread.map((u) => [u._id.toString(), u.count]));
-
-  const payload = conversations.map((c) => {
-    const data = c.toObject ? c.toObject() : c;
-    return {
-      ...data,
-      unreadCount: unreadMap.get(c._id.toString()) || 0,
-    };
-  });
-
+  // The mapping is now largely handled in ChatService.listConversations.
+  // We just return it as is or do minor transforms if needed.
   return res
     .status(200)
-    .json(new ApiResponse(200, payload, "Conversations fetched"));
+    .json(new ApiResponse(200, conversations, "Conversations fetched"));
 });
 
 export const listMessages = asyncHandler(async (req, res) => {
   const { conversationId } = req.params;
   const { limit = 50, before } = req.query;
+
+  // Security: Ensure student is a participant
+  const conversation = await ChatConversation.findOne({
+    _id: conversationId,
+    participants: {
+      $elemMatch: { userId: req.student._id, userType: "Student" },
+    },
+  });
+
+  if (!conversation) {
+    throw new ApiError(403, "Not authorized to view these messages");
+  }
 
   const messages = await ChatService.listMessages(
     conversationId,
@@ -284,6 +281,24 @@ export const listMessages = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, messages, "Messages fetched"));
 });
 
+export const markConversationAsRead = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+
+  // Mark all messages as READ where recipient is CURRENT student
+  await ChatMessage.updateMany(
+    {
+      conversationId,
+      recipientId: req.student._id,
+      status: { $ne: "READ" },
+    },
+    {
+      $set: { status: "READ", readAt: new Date() },
+    },
+  );
+
+  return res.status(200).json(new ApiResponse(200, null, "Messages marked as read"));
+});
+
 export const sendMessage = asyncHandler(async (req, res) => {
   const {
     conversationId,
@@ -292,10 +307,17 @@ export const sendMessage = asyncHandler(async (req, res) => {
     encryptedForRecipient,
     encryptedForSender,
     senderPublicKey,
+    content,
     contentType,
   } = req.body;
 
   if (!conversationId || !recipientId || !recipientType) {
+    logger.warn("Missing required fields in sendMessage (student)", { 
+      body: req.body,
+      conversationId, 
+      recipientId, 
+      recipientType 
+    });
     throw new ApiError(400, "Missing required fields");
   }
 
@@ -312,8 +334,29 @@ export const sendMessage = asyncHandler(async (req, res) => {
     encryptedForRecipient,
     encryptedForSender,
     senderPublicKey,
+    content,
     contentType,
+    tenantId: req.tenantId,
   });
+
+  // Emit real-time message via socket
+  const io = req.app.get("io");
+  if (io) {
+    const recipientRoom = `${recipientType.toLowerCase()}_${recipientId}`;
+    const senderRoom = `student_${req.student._id}`;
+    logger.info("[HTTP-Student] Real-time message emitted", { 
+      conversationId, 
+      recipientId, 
+      recipientType,
+      room: recipientRoom,
+      senderRoom,
+      ioFound: !!io
+    });
+    io.to(recipientRoom).emit("new_message", message);
+    io.to(senderRoom).emit("new_message", message); // Sync other student tabs
+  } else {
+    logger.warn("[HTTP-Student] Socket.io instance NOT found in req.app", { conversationId });
+  }
 
   return res.status(201).json(new ApiResponse(201, message, "Message sent"));
 });
@@ -327,7 +370,10 @@ export const editMessage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "encryptedPayload is required");
   }
 
-  const message = await ChatMessage.findById(messageId);
+  const message = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.student.tenantId,
+  });
   if (!message) {
     throw new ApiError(404, "Message not found");
   }
@@ -347,7 +393,7 @@ export const editMessage = asyncHandler(async (req, res) => {
   const previousSender = message.encryptedForSender;
 
   if (text) {
-    message.text = text;
+    message.content = text;
   }
 
   message.encryptedForRecipient = encryptedPayload;
@@ -373,7 +419,10 @@ export const editMessage = asyncHandler(async (req, res) => {
 export const deleteMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
 
-  const message = await ChatMessage.findById(messageId);
+  const message = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.student.tenantId,
+  });
   if (!message) {
     throw new ApiError(404, "Message not found");
   }
@@ -398,7 +447,10 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { text, encryptedPayload } = req.body;
 
-  const originalMessage = await ChatMessage.findById(messageId);
+  const originalMessage = await ChatMessage.findOne({
+    _id: messageId,
+    tenantId: req.student.tenantId,
+  });
   if (!originalMessage) {
     throw new ApiError(404, "Message not found");
   }
@@ -419,12 +471,13 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     senderType: "Student",
     recipientId: originalMessage.recipientId,
     recipientType: originalMessage.recipientType,
-    text: text || originalMessage.text,
+    content: text || originalMessage.content,
     encryptedForRecipient: encryptedPayload,
     encryptedForSender: encryptedPayload,
     forwardedFrom: messageId,
     contentType: originalMessage.contentType || "TEXT",
     status: "SENT",
+    tenantId: req.student.tenantId,
   });
 
   await newMessage.save();

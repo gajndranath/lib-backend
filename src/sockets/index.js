@@ -166,14 +166,15 @@ export const socketHandlers = (io) => {
         // Accept both userType and role for admin/student
         const userTypeField = decoded.userType || decoded.role;
         if (userTypeField === "STUDENT" || userTypeField === "Student") {
-          userId = decoded._id;
+          userId = decoded._id.toString();
           userType = "Student";
         } else if (
           userTypeField === "ADMIN" ||
           userTypeField === "Admin" ||
-          userTypeField === "SUPER_ADMIN"
+          userTypeField === "SUPER_ADMIN" ||
+          userTypeField === "STAFF"
         ) {
-          userId = decoded._id;
+          userId = decoded._id.toString();
           userType = "Admin";
         }
       } catch (err) {
@@ -196,9 +197,39 @@ export const socketHandlers = (io) => {
 
     try {
       // Join rooms
-      socket.join(`${userType.toLowerCase()}_${userId}`);
-      if (userType === "Admin") socket.join("admins");
-      if (userType === "Student") socket.join("students");
+      const personalRoom = `${userType.toLowerCase()}_${userId}`;
+      socket.join(personalRoom);
+      logger.info("[Socket] User joined personal room", { userId, userType, room: personalRoom });
+      
+      if (userType === "Admin") {
+        socket.join("admins");
+        socket.join("admins_all"); // Standardized
+        logger.info("[Socket] User joined admins rooms", { userId });
+      }
+      if (userType === "Student") {
+        socket.join("students");
+        socket.join("students_all");
+        
+        // Join slot-specific room if student has a slot
+        const Student = (await import("../models/student.model.js")).Student;
+        const Slot = (await import("../models/slot.model.js")).Slot;
+        const student = await Student.findById(userId).select("slotId");
+        if (student?.slotId) {
+            const slotRoom = `student_slot_${student.slotId}`;
+            socket.join(slotRoom);
+            logger.info("[Socket] User joined slot room", { userId, slotRoom });
+            
+            // Join room-specific room
+            const slot = await Slot.findById(student.slotId).select("roomId");
+            if (slot?.roomId) {
+                const roomName = `student_room_${slot.roomId}`;
+                socket.join(roomName);
+                logger.info("[Socket] User joined room room", { userId, roomName });
+            }
+        }
+        
+        logger.info("[Socket] User joined students rooms", { userId });
+      }
 
       socket.emit("connected", {
         success: true,

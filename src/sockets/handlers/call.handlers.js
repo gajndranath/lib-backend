@@ -111,7 +111,7 @@ export const registerCallHandlers = ({
       // ✅ RULE 9: Store SDP in Redis with TTL (30s)
       const encryptedOffer = encryptSdp(sdp);
       await redisClient
-        .setEx(
+        .setex(
           `call:sdp:${callSession._id}`,
           30,
           JSON.stringify({ offer: encryptedOffer }),
@@ -139,7 +139,6 @@ export const registerCallHandlers = ({
         conversationId,
       });
 
-      // ✅ RULE 5: Auto-end unanswered calls after 60s
       const timeoutId = setTimeout(async () => {
         try {
           const call = await CallSession.findById(callSession._id);
@@ -148,6 +147,23 @@ export const registerCallHandlers = ({
               status: "ENDED",
               endedAt: new Date(),
             });
+
+            // Log Missed Call message
+            await ChatService.sendMessage({
+              conversationId: conversationId,
+              senderId: userId,
+              senderType: userType,
+              recipientId: recipientId,
+              recipientType: recipientType,
+              content: "Missed Call",
+              contentType: "CALL",
+              callMetadata: {
+                callStatus: "MISSED",
+                callType: "AUDIO"
+              },
+              tenantId: conversation.tenantId || (await ChatConversation.findById(conversationId))?.tenantId
+            }).catch(e => logger.error("Missed call log failed", e));
+
             io.to(room).emit("call:timeout", { callId: callSession._id });
             await cleanupCall(callSession._id, socket.id);
           }
@@ -161,6 +177,19 @@ export const registerCallHandlers = ({
       }, 60000);
 
       addTimer(socket.id, timeoutId);
+
+      const callerModel = userType === "Admin"
+        ? (await import("../../models/admin.model.js")).Admin
+        : (await import("../../models/student.model.js")).Student;
+      const caller = await callerModel.findById(userId).select("name");
+
+      await NotificationService.sendCallNotification({
+        recipientId: recipientId,
+        recipientType: recipientType,
+        callerName: caller?.name || "Someone",
+        conversationId: conversationId.toString(),
+        tenantId: conversation.tenantId || (await ChatConversation.findById(conversationId))?.tenantId || ""
+      }).catch(() => {});
 
       await NotificationService.sendInAppNotification({
         userId: recipientId,
@@ -231,7 +260,7 @@ export const registerCallHandlers = ({
       // ✅ RULE 9: Store answer SDP in Redis (TTL 30s)
       const encryptedAnswer = encryptSdp(sdp);
       await redisClient
-        .setEx(
+        .setex(
           `call:sdp:${callId}`,
           30,
           JSON.stringify({ answer: encryptedAnswer }),

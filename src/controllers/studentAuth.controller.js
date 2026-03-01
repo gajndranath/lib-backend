@@ -78,7 +78,7 @@ const updateProfileSchema = z
 const OTP_EXP_MIN = 10;
 
 // ✅ Helper function to send OTP emails
-const sendOtpEmail = async (email, otp, purpose) => {
+export const sendOtpEmail = async (email, otp, purpose) => {
   const purposeText =
     purpose === "RESET"
       ? "password reset"
@@ -88,16 +88,7 @@ const sendOtpEmail = async (email, otp, purpose) => {
 
   const subject = `Your ${purposeText} code`;
   const text = `Your ${purposeText} OTP is: ${otp}\n\nThis code will expire in ${OTP_EXP_MIN} minutes.`;
-  console.log("\n🚀 [OTP SEND] Sending OTP:", {
-    to: email,
-    otp,
-    purpose,
-    subject,
-    text,
-    time: new Date().toISOString(),
-  });
   const response = await sendEmail(email, subject, text);
-  console.log("✅ [OTP SEND] Email sent. Response:", response);
   return response;
 };
 
@@ -107,7 +98,7 @@ const sendOtpEmail = async (email, otp, purpose) => {
 
 // Add logging for OTP receive/verify
 const logOtpVerify = (email, otp, status, extra = {}) => {
-  console.log("\n📧 [OTP VERIFY] Attempt:", { email, otp, status, ...extra });
+  // Silent in production
 };
 
 export const registerStudent = asyncHandler(async (req, res) => {
@@ -141,9 +132,6 @@ export const registerStudent = asyncHandler(async (req, res) => {
     process.env.DEV_MODE_REGISTRATION === "true"
   ) {
     emailVerified = true;
-    console.log(
-      "[DEV] Skipping email OTP verification, setting emailVerified: true",
-    );
   } else {
     // Production: require OTP/email verification
     otp = generateOtp();
@@ -175,11 +163,6 @@ export const registerStudent = asyncHandler(async (req, res) => {
     process.env.DEV_MODE_REGISTRATION !== "true"
   ) {
     const emailResult = await sendOtpEmail(email, otp, "VERIFY");
-    if (emailResult?.success) {
-      console.log(`✅ Verification email sent to ${email}`);
-    } else {
-      console.warn(`⚠️ Failed to send verification email to ${email}`);
-    }
   }
 
   const isDevShortcut =
@@ -577,7 +560,13 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { ...student, feeSummary }, "Student profile fetched"));
+    .json(
+      new ApiResponse(
+        200,
+        { ...student, feeSummary },
+        "Student profile fetched",
+      ),
+    );
 });
 
 export const updateStudentProfile = asyncHandler(async (req, res) => {

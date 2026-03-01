@@ -20,6 +20,8 @@ class ChatKeyService {
 
     const Model = userType === "Admin" ? Admin : Student;
     const user = await Model.findById(userId).select("publicKey");
+    console.log(`[DEBUG] ChatKeyService.getPublicKey: userType=${userType}, userId=${userId}, userFound=${!!user}, hasPK=${!!user?.publicKey}`);
+    
     if (!user) {
       logger.warn("Public key lookup failed - user not found", {
         userType,
@@ -29,8 +31,8 @@ class ChatKeyService {
     }
 
     if (!user.publicKey) {
-      logger.warn("Public key missing for user", { userType, userId });
-      throw new ApiError(404, `${userType}'s public key not set yet`);
+      logger.info("Public key not yet set for user", { userType, userId });
+      return null;
     }
 
     logger.info("Public key loaded from DB", { userType, userId });
@@ -81,12 +83,12 @@ class ChatKeyService {
     });
 
     if (!key) {
-      logger.warn("Conversation public key not found", {
+      logger.info("Conversation public key not yet set", {
         conversationId,
         userId,
         userType,
       });
-      throw new ApiError(404, "Conversation public key not found");
+      return null;
     }
 
     logger.info("Conversation public key loaded from DB", {

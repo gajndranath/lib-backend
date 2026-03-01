@@ -44,6 +44,7 @@ const notificationSchema = new Schema(
         "ANNOUNCEMENT",
         "CALL",
         "SYSTEM_ALERT",
+        "FEE_OVERDUE_BULK",
         "TEST",
       ],
       index: true,
@@ -140,6 +141,7 @@ notificationSchema.statics.getUnreadCount = async function (userId) {
   return await this.countDocuments({
     userId,
     read: false,
+    type: { $nin: ["CHAT_MESSAGE", "CALL"] }
   });
 };
 

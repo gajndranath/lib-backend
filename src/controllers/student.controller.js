@@ -30,6 +30,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
   const student = await StudentService.registerStudent(
     validation.data,
     req.admin._id,
+    req.tenantId,
   );
 
   return res
@@ -103,8 +104,10 @@ export const getStudentDetails = asyncHandler(async (req, res) => {
 export const searchStudents = asyncHandler(async (req, res) => {
   const { query, page = 1, limit = 20 } = req.query;
 
+  console.log(`[DEBUG] searchStudents Controller - Tenant: ${req.tenantId}, Status: ${req.query.status}`);
+
   const result = await StudentService.searchStudents(
-    { search: query, ...req.query },
+    { search: query, ...req.query, tenantId: req.tenantId },
     parseInt(page),
     parseInt(limit),
   );
@@ -215,6 +218,7 @@ export const getDashboardPaymentStatus = asyncHandler(async (req, res) => {
   const status = await FeeService.getDashboardPaymentStatus(
     targetMonth,
     targetYear,
+    req.tenantId, // ✅ SCOPE TO TENANT
   );
 
   return res
@@ -473,8 +477,11 @@ export const getStudentFeeCalendar = asyncHandler(async (req, res) => {
 export const getOverdueSummary = asyncHandler(async (req, res) => {
   const { DueRecord } = await import("../models/dueRecord.model.js");
 
-  // Fetch all unresolved due records, populated with student info
-  const dueRecords = await DueRecord.find({ resolved: false })
+  // Fetch all unresolved due records for this tenant, populated with student info
+  const dueRecords = await DueRecord.find({ 
+    resolved: false,
+    tenantId: req.tenantId || { $exists: false } // Lenient for legacy records
+  })
     .populate("studentId", "name phone email libraryId monthlyFee")
     .lean({ virtuals: true }); // virtuals: true gives us daysOverdue virtual
 
@@ -545,7 +552,11 @@ export const sendBulkOverdueReminders = asyncHandler(async (req, res) => {
 
   for (const studentId of studentIds) {
     try {
-      const dueRecord = await DueRecord.findOne({ studentId, resolved: false });
+      const dueRecord = await DueRecord.findOne({ 
+        studentId, 
+        resolved: false,
+        tenantId: req.tenantId || { $exists: false }
+      });
       const student = await Student.findById(studentId);
       if (!dueRecord || !student) continue;
       await NotificationService.sendMultiChannelNotification({
@@ -573,7 +584,10 @@ export const sendBulkOverdueReminders = asyncHandler(async (req, res) => {
 
 export const exportOverdueSummaryCSV = asyncHandler(async (req, res) => {
   const { DueRecord } = await import("../models/dueRecord.model.js");
-  const dueRecords = await DueRecord.find({ resolved: false })
+  const dueRecords = await DueRecord.find({ 
+    resolved: false,
+    tenantId: req.tenantId || { $exists: false }
+  })
     .populate("studentId", "name phone email libraryId monthlyFee")
     .lean({ virtuals: true });
 

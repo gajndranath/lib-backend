@@ -24,18 +24,41 @@ export const checkSlotCapacity = async (slotId) => {
     throw new ApiError(400, "Slot is not active");
   }
 
-  const occupiedSeats = await Student.countDocuments({
+  // 1. Density in THIS specific slot
+  const slotSpecificOccupancy = await Student.countDocuments({
     slotId: slotId,
     status: "ACTIVE",
     isDeleted: false,
   });
 
+  // 2. Additional density from FULL_DAY overlapping students (if this is a PARTIAL slot)
+  let overlappingOccupancy = 0;
+  if (slot.slotType === "PARTIAL") {
+    const fullDaySlots = await Slot.find({
+      roomId: slot.roomId,
+      slotType: "FULL_DAY",
+      isActive: true,
+      _id: { $ne: slotId }
+    }).select("_id");
+
+    if (fullDaySlots.length > 0) {
+      overlappingOccupancy = await Student.countDocuments({
+        slotId: { $in: fullDaySlots.map(s => s._id) },
+        status: "ACTIVE",
+        isDeleted: false
+      });
+    }
+  }
+
+  const occupiedSeats = slotSpecificOccupancy + overlappingOccupancy;
   const availableSeats = slot.totalSeats - occupiedSeats;
   const isFull = occupiedSeats >= slot.totalSeats;
 
   return {
     slot,
-    occupiedSeats,
+    slotSpecificOccupancy,
+    overlappingOccupancy,
+    occupiedSeats, // Total Collective Density
     availableSeats,
     isFull,
     occupancyPercentage: Math.round((occupiedSeats / slot.totalSeats) * 100),
@@ -79,25 +102,43 @@ export const validateSlotChange = (currentSlotId, newSlotId) => {
 export const getAllSlotsWithOccupancy = async () => {
   const slots = await Slot.find().populate("roomId", "name").lean();
 
-  const slotsWithOccupancy = await Promise.all(
-    slots.map(async (slot) => {
-      const occupiedSeats = await Student.countDocuments({
-        slotId: slot._id,
-        status: "ACTIVE",
-        isDeleted: false,
-      });
+  // 1. Pre-calculate occupancy map for all slots
+  const occupancyMap = {};
+  const allActiveStudents = await Student.find({ status: "ACTIVE", isDeleted: false }).select("slotId");
+  
+  allActiveStudents.forEach(s => {
+    const sId = s.slotId.toString();
+    occupancyMap[sId] = (occupancyMap[sId] || 0) + 1;
+  });
 
-      return {
-        ...slot,
-        occupiedSeats,
-        availableSeats: slot.totalSeats - occupiedSeats,
-        occupancyPercentage: Math.round(
-          (occupiedSeats / slot.totalSeats) * 100,
-        ),
-        isFull: occupiedSeats >= slot.totalSeats,
-      };
-    }),
-  );
+  // 2. Identify FULL_DAY slots per room for collective calculations
+  const roomFullDayStudents = {};
+  slots.forEach(slot => {
+    if (slot.slotType === 'FULL_DAY') {
+      const rId = slot.roomId?._id?.toString() || slot.roomId?.toString();
+      roomFullDayStudents[rId] = (roomFullDayStudents[rId] || 0) + (occupancyMap[slot._id.toString()] || 0);
+    }
+  });
+
+  const slotsWithOccupancy = slots.map((slot) => {
+    const slotIdStr = slot._id.toString();
+    const roomIdStr = slot.roomId?._id?.toString() || slot.roomId?.toString();
+    
+    // Collective count: students in this slot + students in FULL_DAY slots for this room
+    let occupiedSeats = occupancyMap[slotIdStr] || 0;
+    
+    if (slot.slotType === "PARTIAL" && roomFullDayStudents[roomIdStr]) {
+      occupiedSeats += roomFullDayStudents[roomIdStr];
+    }
+
+    return {
+      ...slot,
+      occupiedSeats,
+      availableSeats: Math.max(0, slot.totalSeats - occupiedSeats),
+      occupancyPercentage: Math.round((occupiedSeats / slot.totalSeats) * 100),
+      isFull: occupiedSeats >= slot.totalSeats,
+    };
+  });
 
   return slotsWithOccupancy;
 };
