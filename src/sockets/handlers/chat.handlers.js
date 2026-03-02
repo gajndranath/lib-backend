@@ -444,6 +444,27 @@ export const registerChatHandlers = ({
     });
   });
 
+  socket.on("call:ice_restart", ({ recipientId, recipientType, offer }) => {
+    const room = `${recipientType.toLowerCase()}_${recipientId.toString()}`;
+    io.to(room).emit("call:ice_restart", {
+      fromId: userId,
+      fromType: userType,
+      offer,
+    });
+  });
+
+  socket.on(
+    "call:ice_restart_answer",
+    ({ recipientId, recipientType, answer }) => {
+      const room = `${recipientType.toLowerCase()}_${recipientId.toString()}`;
+      io.to(room).emit("call:ice_restart_answer", {
+        fromId: userId,
+        fromType: userType,
+        answer,
+      });
+    },
+  );
+
   // ========== ACTIVE CONVERSATION TRACKING (to skip notifications) ==========
 
   socket.on("chat:set-active-conversation", async ({ conversationId }) => {
