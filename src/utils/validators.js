@@ -10,6 +10,55 @@ export const sanitizeString = (str) => {
   });
 };
 
+// List of common temporary email domains
+const tempEmailDomains = new Set([
+  "10minutemail.com",
+  "mailinator.com",
+  "temp-mail.org",
+  "guerrillamail.com",
+  "sharklasers.com",
+  "discard.email",
+  "yopmail.com",
+  "mail.tm",
+  "tempmail.dev",
+  "tempmail.guru",
+  "boun.cr",
+  "chaps.email",
+  "crazymailing.com",
+  "dayrep.com",
+  "dispostable.com",
+  "dropmail.me",
+  "fakeinbox.com",
+  "getnada.com",
+  "harakirimail.com",
+  "inboxalias.com",
+  "maildrop.cc",
+  "mailexpire.com",
+  "mailnesia.com",
+  "mailnull.com",
+  "mintemail.com",
+  "mytrashmail.com",
+  "nowmymail.com",
+  "notsharingmy.info",
+  "pookmail.com",
+  "proxify.net",
+  "spambog.com",
+  "trash-mail.com",
+  "trashmail.com",
+  "trashmail.net",
+  "zehen.com",
+]);
+
+/**
+ * Check if the email domain is in the blocked temporary list
+ */
+export const isTemporaryEmail = (email) => {
+  if (!email || typeof email !== "string") return false;
+  const domain = email.split("@")[1]?.toLowerCase();
+  return tempEmailDomains.has(domain);
+};
+
+
 // Common validation patterns
 const patterns = {
   phone: /^\d{10}$/,
@@ -31,6 +80,9 @@ export const studentRegistrationSchema = z
       .string()
       .email("Invalid email format")
       .max(255, "Email must be less than 255 characters")
+      .refine((email) => !isTemporaryEmail(email), {
+        message: "Temporary/Fake email addresses are not allowed",
+      })
       .optional()
       .or(z.literal("")),
     address: z
@@ -131,7 +183,10 @@ export const adminRegisterSchema = z.object({
   email: z
     .string()
     .email("Invalid email format")
-    .max(255, "Email must be less than 255 characters"),
+    .max(255, "Email must be less than 255 characters")
+    .refine((email) => !isTemporaryEmail(email), {
+      message: "Temporary/Fake email addresses are not allowed",
+    }),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")

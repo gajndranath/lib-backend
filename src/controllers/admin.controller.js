@@ -8,6 +8,8 @@ import StudentService from "../services/student.service.js";
 import { invalidateAdminCache } from "../middlewares/auth.middleware.js";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { isTemporaryEmail } from "../utils/validators.js";
+
 
 // Zod validation schema with stricter rules
 const registerAdminSchema = z.object({
@@ -19,7 +21,13 @@ const registerAdminSchema = z.object({
       /^[a-z0-9_]+$/,
       "Username can only contain lowercase letters, numbers, and underscores",
     ),
-  email: z.string().email("Invalid email format").max(255, "Email is too long"),
+  email: z
+    .string()
+    .email("Invalid email format")
+    .max(255, "Email is too long")
+    .refine((email) => !isTemporaryEmail(email), {
+      message: "Temporary/Fake email addresses are not allowed",
+    }),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")

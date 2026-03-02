@@ -18,6 +18,8 @@ import {
   checkEmailExists,
   checkPhoneExists,
 } from "../utils/studentHelpers.js";
+import { isTemporaryEmail } from "../utils/validators.js";
+
 
 const otpRequestSchema = z.object({
   email: z.string().trim().email(),
@@ -50,8 +52,14 @@ const resetSchema = z.object({
 
 const registerSchema = z.object({
   name: z.string().min(2).max(100),
-  email: z.string().email(),
+  email: z
+    .string()
+    .email()
+    .refine((email) => !isTemporaryEmail(email), {
+      message: "Temporary/Fake email addresses are not allowed",
+    }),
   phone: z.string().regex(/^\d{10}$/), // ✅ Required for student
+
   address: z.string().optional(),
   fatherName: z.string().optional(),
   password: z
