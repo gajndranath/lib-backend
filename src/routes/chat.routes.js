@@ -21,6 +21,8 @@ import {
   deleteMessage,
   forwardMessage,
   markConversationAsRead,
+  toggleMute,
+  toggleBlock,
 } from "../controllers/chat.controller.js";
 
 const router = Router();
@@ -64,6 +66,14 @@ router
 router
   .route("/conversations/:conversationId/read")
   .post(apiLimiter, markConversationAsRead);
+
+router
+  .route("/conversations/:conversationId/mute")
+  .post(apiLimiter, toggleMute);
+
+router
+  .route("/conversations/:conversationId/block")
+  .post(apiLimiter, toggleBlock);
 
 // Message sending - high rate limit (chat specific)
 router.route("/messages").post(chatLimiter, sendMessage);

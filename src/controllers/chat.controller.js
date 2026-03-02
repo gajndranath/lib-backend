@@ -287,9 +287,25 @@ export const listConversations = asyncHandler(async (req, res) => {
 
   const unreadMap = new Map(unread.map((u) => [u._id.toString(), u.count]));
   
-  const payload = mappedConversations.map((c) => ({
-    ...c,
-    unreadCount: unreadMap.get(c._id.toString()) || 0,
+  const payload = await Promise.all(mappedConversations.map(async (c) => {
+    const otherParticipant = c.participants.find(
+      (p) => String(p.participantId) !== String(req.admin._id)
+    );
+    
+    let online = false;
+    if (otherParticipant) {
+      const presence = await ChatService.getParticipantPresence(
+        otherParticipant.participantType,
+        otherParticipant.participantId
+      );
+      online = presence.online;
+    }
+
+    return {
+      ...c,
+      unreadCount: unreadMap.get(c._id.toString()) || 0,
+      online
+    };
   }));
 
   return res
@@ -537,4 +553,20 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   return res
     .status(201)
     .json(new ApiResponse(201, payload, "Message forwarded"));
+});
+
+export const toggleMute = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const conversation = await ChatService.toggleMute(conversationId, req.admin._id);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, conversation, "Mute toggled successfully"));
+});
+
+export const toggleBlock = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const conversation = await ChatService.toggleBlock(conversationId, req.admin._id);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, conversation, "Block toggled successfully"));
 });

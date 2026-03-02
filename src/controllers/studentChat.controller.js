@@ -488,3 +488,19 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     .status(201)
     .json(new ApiResponse(201, payload, "Message forwarded"));
 });
+
+export const toggleMute = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const conversation = await ChatService.toggleMute(conversationId, req.student._id);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, conversation, "Mute toggled successfully"));
+});
+
+export const toggleBlock = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const conversation = await ChatService.toggleBlock(conversationId, req.student._id);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, conversation, "Block toggled successfully"));
+});

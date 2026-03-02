@@ -132,6 +132,7 @@ import expenseRouter from "./routes/expense.routes.js";
 import uploadRouter from "./routes/upload.routes.js";
 import attendanceRouter from "./routes/attendance.routes.js";
 import roomRouter from "./routes/room.routes.js";
+import moderationRouter from "./routes/moderation.routes.js";
 
 // Register routes
 app.use("/api/v1/students", studentRouter);
@@ -150,6 +151,7 @@ app.use("/api/v1/reminders", reminderRouter);
 app.use("/api/v1/library", libraryRouter);
 app.use("/api/v1/expenses", expenseRouter);
 app.use("/api/v1/attendance", attendanceRouter);
+app.use("/api/v1/moderation", moderationRouter);
 
 
 // Health check - minimal info

@@ -130,6 +130,30 @@ export const registerChatHandlers = ({
     }
   });
 
+  socket.on("chat:sync_delivery", async () => {
+    try {
+      const messages = await ChatService.markAllPendingAsDelivered(userId, userType);
+      if (messages.length > 0) {
+        // Group by sender to avoid excessive emissions
+        const senderGroups = messages.reduce((acc, m) => {
+          const key = `${m.senderType.toLowerCase()}_${m.senderId.toString()}`;
+          if (!acc[key]) acc[key] = [];
+          acc[key].push(m);
+          return acc;
+        }, {});
+
+        for (const [room, msgs] of Object.entries(senderGroups)) {
+          io.to(room).emit("chat:status_bulk", {
+            status: "DELIVERED",
+            messageIds: msgs.map(m => m._id)
+          });
+        }
+      }
+    } catch (err) {
+      logger.error("chat:sync_delivery failed", { error: err.message });
+    }
+  });
+
   socket.on("chat:read", async ({ messageId }) => {
     if (!messageId) return;
     try {

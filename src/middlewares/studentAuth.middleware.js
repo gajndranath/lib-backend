@@ -23,6 +23,14 @@ export const verifyStudentJWT = asyncHandler(async (req, _res, next) => {
 
     if (!student) throw new ApiError(401, "Invalid Access Token");
 
+    // Check for banned or suspended status
+    if (student.status === "BANNED") {
+      throw new ApiError(403, "Your account has been permanently banned due to violation of community guidelines.");
+    }
+    if (student.status === "SUSPENDED") {
+      throw new ApiError(403, "Your account is currently suspended. Please contact administration.");
+    }
+
     req.student = student;
     next();
   } catch (error) {

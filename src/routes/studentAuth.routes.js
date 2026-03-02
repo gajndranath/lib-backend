@@ -18,15 +18,20 @@ import {
   getStudentVapidKey,
   saveStudentPushSubscription,
   removeStudentPushSubscription,
-  verifyPhoneWithFirebase,
-  requestSlotChange,
-  getMySlotChangeHistory,
   listChatStudents,
   listChatAdmins,
   getPaymentReceipt,
   downloadPaymentReceiptPDF,
   getAvailableSlots,
+  getMyFeeCalendar,
+  verifyPhoneWithFirebase,
+  requestSlotChange,
+  getMySlotChangeHistory,
 } from "../controllers/studentAuth.controller.js";
+import {
+  toggleMute,
+  toggleBlock,
+} from "../controllers/studentChat.controller.js";
 import { verifyStudentJWT } from "../middlewares/studentAuth.middleware.js";
 import {
   resolveTenant,
@@ -67,6 +72,7 @@ router.use(resolveTenant);
 
 router.route("/profile").get(getStudentProfile).patch(updateStudentProfile);
 router.route("/dashboard").get(getStudentDashboard);
+router.route("/fee-calendar").get(getMyFeeCalendar);
 router.route("/payments").get(getPaymentHistory);
 router.route("/payments/:month/:year/receipt").get(getPaymentReceipt);
 router

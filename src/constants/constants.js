@@ -10,6 +10,23 @@ export const StudentStatus = {
   ACTIVE: "ACTIVE",
   INACTIVE: "INACTIVE",
   ARCHIVED: "ARCHIVED",
+  BANNED: "BANNED",
+  SUSPENDED: "SUSPENDED",
+};
+
+export const ReportReason = {
+  SPAM: "SPAM",
+  HARASSMENT: "HARASSMENT",
+  FAKE_ACCOUNT: "FAKE_ACCOUNT",
+  INAPPROPRIATE_CONTENT: "INAPPROPRIATE_CONTENT",
+  OTHER: "OTHER",
+};
+
+export const ReportStatus = {
+  PENDING: "PENDING",
+  REVIEWING: "REVIEWING",
+  RESOLVED: "RESOLVED",
+  DISMISSED: "DISMISSED",
 };
 
 export const FeeStatus = {

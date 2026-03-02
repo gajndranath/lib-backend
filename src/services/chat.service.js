@@ -5,6 +5,7 @@ import { Student } from "../models/student.model.js";
 import { ConversationKey } from "../models/conversationKey.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import ChatEncryptionService from "./chatEncryption.service.js";
+import { getRedisClient } from "../config/redis.js";
 
 const buildParticipantsHash = (a, b) => {
   const left = `${a.userType}:${a.userId.toString()}`;
@@ -13,6 +14,18 @@ const buildParticipantsHash = (a, b) => {
 };
 
 class ChatService {
+  static async getParticipantPresence(userType, userId) {
+    const redisClient = getRedisClient();
+    const key = `presence:${userType}:${userId}`;
+    const data = await redisClient.get(key);
+    if (!data) return { online: false, lastSeen: null };
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      return { online: false, lastSeen: null };
+    }
+  }
+
   static async getOrCreateConversation(participantA, participantB, tenantId) {
     const participantsHash = buildParticipantsHash(participantA, participantB);
 
@@ -69,9 +82,19 @@ class ChatService {
           (p) => p.userId?._id?.toString() !== userId.toString() && p.userId?.toString() !== userId.toString()
         );
 
+        let online = false;
+        if (otherParticipant) {
+          const presence = await this.getParticipantPresence(
+            otherParticipant.userType,
+            otherParticipant.userId?._id || otherParticipant.userId
+          );
+          online = presence.online;
+        }
+
         return {
           ...conv,
           unreadCount,
+          online,
           participants: conv.participants.map((p) => ({
             participantId: p.userId?._id || p.userId,
             participantType: p.userType,
@@ -179,6 +202,24 @@ class ChatService {
       { status: "DELIVERED", deliveredAt: new Date() },
       { new: true },
     );
+  }
+
+  static async markAllPendingAsDelivered(recipientId, recipientType) {
+    const messages = await ChatMessage.find({
+      recipientId,
+      recipientType,
+      status: "SENT",
+      isDeleted: false
+    });
+
+    if (messages.length === 0) return [];
+
+    await ChatMessage.updateMany(
+      { _id: { $in: messages.map(m => m._id) } },
+      { $set: { status: "DELIVERED", deliveredAt: new Date() } }
+    );
+
+    return messages;
   }
 
   static async markRead(messageId) {

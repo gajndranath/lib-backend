@@ -111,17 +111,24 @@ export const sendFCMNotification = async (token, notification, data = {}) => {
     console.log("✅ FCM notification sent successfully. Response:", response);
     return { success: true, messageId: response };
   } catch (error) {
-    console.error("❌ FCM notification error:", error.message);
-    if (error.stack) console.error(error.stack);
+    // Handle specific invalid token errors
+    const isInvalidToken = 
+      error.code === "messaging/registration-token-not-registered" || 
+      error.code === "messaging/invalid-registration-token" ||
+      error.message?.includes("Requested entity was not found");
 
-    // Handle specific errors
-    if (error.code === "messaging/registration-token-not-registered") {
+    if (isInvalidToken) {
+      console.warn(`[FCM] ⚠️ Stale token detected (entity not found or unregistered). Notifying caller to prune.`);
       return {
         success: false,
         error: "Token not registered",
         code: "TOKEN_INVALID",
       };
     }
+
+    // Only log as full error if it's not a known stale token issue
+    console.error("❌ FCM notification error:", error.message);
+    if (error.stack) console.error(error.stack);
 
     return { success: false, error: error.message };
   }

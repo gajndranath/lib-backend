@@ -5,6 +5,24 @@ import NotificationTemplateService from "./notificationTemplate.service.js";
 
 class NotificationService {
   /**
+   * Remove invalid FCM token from database
+   */
+  static async pruneInvalidToken(userId, userType) {
+    try {
+      const Model = userType === "Admin"
+        ? (await import("../models/admin.model.js")).Admin
+        : (await import("../models/student.model.js")).Student;
+      
+      await Model.findByIdAndUpdate(userId, { $set: { fcmToken: null } });
+      console.log(`🧹 Pruned invalid FCM token for ${userType} ${userId}`);
+      return true;
+    } catch (error) {
+      console.error("pruneInvalidToken error:", error);
+      return false;
+    }
+  }
+
+  /**
    * Send payment reminder to student
    * Delegates to template service
    */
@@ -134,6 +152,10 @@ class NotificationService {
           { title, body: message },
           { type: "CHAT_MESSAGE", conversationId },
         );
+
+        if (results.push?.code === "TOKEN_INVALID") {
+          await this.pruneInvalidToken(recipientId, recipientType);
+        }
       }
 
       return results;
@@ -176,6 +198,10 @@ class NotificationService {
         }
       );
 
+      if (results.push?.code === "TOKEN_INVALID") {
+        await this.pruneInvalidToken(recipientId, recipientType);
+      }
+
       return results;
     } catch (error) {
       console.error("sendCallNotification error:", error);
@@ -217,6 +243,10 @@ class NotificationService {
           { title, body: message },
           { type: "ANNOUNCEMENT" },
         );
+
+        if (results.push?.code === "TOKEN_INVALID") {
+          await this.pruneInvalidToken(studentId, "Student");
+        }
       }
 
       return results;
@@ -255,6 +285,10 @@ class NotificationService {
           },
           { type },
         );
+
+        if (results.push?.code === "TOKEN_INVALID") {
+          await this.pruneInvalidToken(adminId, "Admin");
+        }
       }
 
       // Send web push
@@ -411,6 +445,10 @@ class NotificationService {
           },
           { type: "TEST" },
         );
+
+        if (testResults.fcm?.code === "TOKEN_INVALID") {
+          await this.pruneInvalidToken(adminId, "Admin");
+        }
       }
 
       // Test Web Push

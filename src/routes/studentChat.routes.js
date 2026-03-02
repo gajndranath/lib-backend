@@ -20,6 +20,8 @@ import {
   deleteMessage,
   forwardMessage,
   markConversationAsRead,
+  toggleMute,
+  toggleBlock,
 } from "../controllers/studentChat.controller.js";
 import {
   sendFriendRequest,
@@ -61,6 +63,8 @@ router
   .post(createOrGetConversation);
 router.route("/conversations/:conversationId/messages").get(listMessages);
 router.route("/conversations/:conversationId/read").post(markConversationAsRead);
+router.route("/conversations/:conversationId/mute").post(toggleMute);
+router.route("/conversations/:conversationId/block").post(toggleBlock);
 router.route("/messages").post(sendMessage);
 
 // ✅ Message edit, delete, forward - same as admin routes
