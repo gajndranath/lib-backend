@@ -107,8 +107,10 @@ export const getAllSlotsWithOccupancy = async () => {
   const allActiveStudents = await Student.find({ status: "ACTIVE", isDeleted: false }).select("slotId");
   
   allActiveStudents.forEach(s => {
-    const sId = s.slotId.toString();
-    occupancyMap[sId] = (occupancyMap[sId] || 0) + 1;
+    if (s.slotId) {
+      const sId = s.slotId.toString();
+      occupancyMap[sId] = (occupancyMap[sId] || 0) + 1;
+    }
   });
 
   // 2. Identify FULL_DAY slots per room for collective calculations
